@@ -1,0 +1,2471 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CRE Lab — 연구과제 예산 집행 관리 및 모니터링</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/gh/nicepkg/cdn/KoPubWorld/KoPubWorldDotumMedium.css" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+<!-- ★ Firebase SDK (Google 로그인) -->
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
+  from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
+
+// ══════════════════════════════════════════════════════
+// 초대용량풍력혁신연구센터 인력양성사업 — Firebase 설정
+// ══════════════════════════════════════════════════════
+const firebaseConfig = {
+  apiKey:            "AIzaSyDldhLJnWLdLWXpTFp1EqXl3oQv0uxHpJM",
+  authDomain:        "wishhap-90aab.firebaseapp.com",
+  projectId:         "wishhap-90aab",
+  storageBucket:     "wishhap-90aab.firebasestorage.app",
+  messagingSenderId: "268364665439",
+  appId:             "1:268364665439:web:05f5abfa871a638a9681ea",
+  measurementId:     "G-B0GDTL7858"
+};
+
+// ══════════════════════════════════════════════════════
+// 허용된 연구팀 Google 계정 목록
+// 새 팀원 추가 시 이메일을 이 목록에 추가하세요
+// ══════════════════════════════════════════════════════
+const ALLOWED_EMAILS = [
+  "wishhap416@knu.ac.kr",   // 연구팀원 1
+  "dnjsgkr416@gmail.com",   // 연구팀원 2
+  "dcheon@knu.ac.kr",       // 연구팀원 3
+  // 추가 계정을 여기에 입력하세요
+];
+
+// ── Firebase 초기화 ──────────────────────────────────
+const app      = initializeApp(firebaseConfig);
+const auth     = getAuth(app);
+const provider = new GoogleAuthProvider();
+provider.setCustomParameters({ hd: '' }); // 모든 Google 계정 허용
+
+// ── 로그인 상태 감지 ─────────────────────────────────
+onAuthStateChanged(auth, user => {
+  if (user) {
+    // 허용된 이메일인지 확인
+    if (!ALLOWED_EMAILS.includes(user.email)) {
+      showAccessDenied(user);
+      signOut(auth);
+      return;
+    }
+    showApp(user);
+  } else {
+    showLogin();
+  }
+});
+
+// ── Google 로그인 실행 ───────────────────────────────
+window.doGoogleLogin = async () => {
+  const btn = document.getElementById('loginBtn');
+  btn.disabled = true;
+  btn.textContent = '로그인 중...';
+  try {
+    await signInWithPopup(auth, provider);
+  } catch(e) {
+    btn.disabled = false;
+    btn.textContent = 'Google 계정으로 로그인';
+    if(e.code !== 'auth/popup-closed-by-user'){
+      document.getElementById('login-error').textContent =
+        '로그인 오류: ' + (e.message||e.code);
+    }
+  }
+};
+
+// ── 로그아웃 ─────────────────────────────────────────
+window.doLogout = async () => {
+  if(confirm('로그아웃 하시겠습니까?')){
+    await signOut(auth);
+  }
+};
+
+// ── UI 전환 함수들 ────────────────────────────────────
+function showLogin() {
+  document.getElementById('loginScreen').style.display = 'flex';
+  document.getElementById('appScreen').style.display   = 'none';
+}
+
+function showApp(user) {
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('appScreen').style.display   = 'block';
+  // 시스템 바 사용자 정보
+  document.getElementById('userName').textContent = user.displayName || user.email.split('@')[0];
+  document.getElementById('userEmail').textContent = user.email;
+  // 헤더 아바타 — 프로필 사진 있으면 이미지, 없으면 이니셜
+  const avatarImg    = document.getElementById('userAvatar');
+  const avatarCircle = document.getElementById('userAvatarCircle');
+  if(user.photoURL){
+    avatarImg.src = user.photoURL;
+    avatarImg.style.display = 'block';
+    if(avatarCircle) avatarCircle.style.display = 'none';
+  } else {
+    if(avatarCircle){
+      const initial = (user.displayName || user.email).charAt(0).toUpperCase();
+      avatarCircle.textContent = initial;
+      avatarCircle.style.display = 'flex';
+    }
+  }
+}
+
+function showAccessDenied(user) {
+  document.getElementById('login-error').innerHTML =
+    `<strong>${user.email}</strong> 계정은 접근 권한이 없습니다.<br>
+    연구책임자에게 계정 추가를 요청하세요.`;
+  document.getElementById('loginBtn').disabled = false;
+  document.getElementById('loginBtn').textContent = 'Google 계정으로 로그인';
+}
+</script>
+<style>
+/* ══════════════════════════════════════════════════════════
+   CRE Lab — 연구과제 예산 집행 관리 및 모니터링
+   inspired by IRIS (iris.go.kr) UI quality
+   ══════════════════════════════════════════════════════════ */
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&family=JetBrains+Mono:wght@400;600&display=swap');
+
+:root {
+  --bg: #f4f6f9;
+  --white: #ffffff;
+  --surface: #f9fafc;
+
+  /* KNU RED 팔레트 */
+  --red-900: #7f1d1d;
+  --red-800: #8b1c1c;
+  --red-700: #991b1b;
+  --red-600: #b91c1c;
+  --red-500: #dc2626;
+  --red-100: #fee2e2;
+  --red-50:  #fef2f2;
+
+  /* 골드 */
+  --gold: #f59e0b;
+  --gold-light: #fde68a;
+
+  /* 중립 */
+  --gray-900: #111827;
+  --gray-800: #1f2937;
+  --gray-700: #374151;
+  --gray-600: #4b5563;
+  --gray-500: #6b7280;
+  --gray-400: #9ca3af;
+  --gray-300: #d1d5db;
+  --gray-200: #e5e7eb;
+  --gray-100: #f3f4f6;
+  --gray-50:  #f9fafb;
+
+  /* 상태 */
+  --green-700: #15803d;
+  --green-600: #16a34a;
+  --green-50:  #f0fdf4;
+  --green-100: #dcfce7;
+  --blue-700:  #1d4ed8;
+  --blue-50:   #eff6ff;
+  --blue-100:  #dbeafe;
+  --amber-700: #b45309;
+  --amber-50:  #fffbeb;
+  --amber-100: #fde68a;
+
+  /* 그림자 */
+  --shadow-sm: 0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.04);
+  --shadow-md: 0 4px 12px rgba(0,0,0,.08), 0 2px 4px rgba(0,0,0,.04);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,.10), 0 4px 8px rgba(0,0,0,.05);
+
+  /* 기타 */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --transition: all .18s cubic-bezier(.4,0,.2,1);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Noto Sans KR', -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--gray-800);
+  font-size: 13px;
+  line-height: 1.6;
+  min-height: 100vh;
+}
+
+/* ──────────────────────────────────────────
+   TOP SYSTEM BAR (IRIS 최상단 다크바)
+────────────────────────────────────────── */
+.sys-bar {
+  background: #1e2a3a;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  padding: 0 28px;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+}
+.sys-bar-inner {
+  max-width: 1600px;
+  margin: 0 auto;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+.sys-bar-links { display: flex; gap: 0; margin-right: auto; }
+.sys-bar-link {
+  font-size: 11px;
+  color: rgba(255,255,255,.55);
+  padding: 0 12px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  border-right: 1px solid rgba(255,255,255,.08);
+  transition: var(--transition);
+  text-decoration: none;
+  cursor: pointer;
+}
+.sys-bar-link:hover { color: rgba(255,255,255,.9); background: rgba(255,255,255,.05); }
+.sys-bar-link:first-child { border-left: 1px solid rgba(255,255,255,.08); }
+.sys-bar-user {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 11px;
+  color: rgba(255,255,255,.65);
+}
+.sys-bar-user strong { color: rgba(255,255,255,.9); font-weight: 600; }
+.sys-bar-sep { color: rgba(255,255,255,.2); }
+.sys-bar-logout {
+  font-size: 11px;
+  color: rgba(255,255,255,.55);
+  background: rgba(255,255,255,.08);
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 3px;
+  padding: 3px 10px;
+  cursor: pointer;
+  transition: var(--transition);
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.sys-bar-logout:hover { background: rgba(255,255,255,.15); color: #fff; }
+
+/* ──────────────────────────────────────────
+   MAIN HEADER (IRIS 로고 + 네비)
+────────────────────────────────────────── */
+.hdr {
+  background: var(--white);
+  height: 68px;
+  border-bottom: 1px solid var(--gray-200);
+  box-shadow: var(--shadow-sm);
+  position: sticky;
+  top: 32px;
+  z-index: 999;
+}
+.hdr-inner {
+  max-width: 1600px;
+  margin: 0 auto;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  padding: 0 28px;
+  gap: 0;
+}
+.hdr-logo-area {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-right: 28px;
+  border-right: 1px solid var(--gray-200);
+  flex-shrink: 0;
+}
+.hdr-logo-img {
+  height: 30px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+.hdr-logo-fallback {
+  font-size: 16px;
+  font-weight: 900;
+  color: var(--red-800);
+  letter-spacing: -0.5px;
+  display: none;
+}
+.hdr-logo-divider {
+  width: 1px;
+  height: 24px;
+  background: var(--gray-300);
+}
+.hdr-logo-sub {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gray-600);
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.hdr-logo-sub span {
+  display: block;
+  font-size: 9px;
+  font-weight: 400;
+  color: var(--gray-400);
+  margin-top: 1px;
+}
+.hdr-title-area {
+  padding-left: 24px;
+  flex: 1;
+}
+.hdr-system-name {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--gray-900);
+  letter-spacing: -0.3px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.hdr-system-badge {
+  font-size: 9px;
+  font-weight: 700;
+  background: var(--red-50);
+  color: var(--red-700);
+  border: 1px solid var(--red-100);
+  border-radius: 3px;
+  padding: 2px 7px;
+  letter-spacing: 0.3px;
+}
+.hdr-system-sub {
+  font-size: 10px;
+  color: var(--gray-500);
+  margin-top: 2px;
+}
+
+/* ──────────────────────────────────────────
+   GNB 탭 (IRIS 메인 네비)
+────────────────────────────────────────── */
+.gnb {
+  background: var(--white);
+  border-bottom: 2px solid var(--red-800);
+  box-shadow: 0 2px 8px rgba(0,0,0,.06);
+  position: sticky;
+  top: 100px;
+  z-index: 998;
+}
+.gnb-inner {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 0 28px;
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  overflow-x: auto;
+}
+.gnb-tab {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gray-500);
+  padding: 0 20px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 3px solid transparent;
+  cursor: pointer;
+  transition: var(--transition);
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin-bottom: -2px;
+  position: relative;
+}
+.gnb-tab:hover { color: var(--red-700); background: var(--red-50); }
+.gnb-tab.on {
+  color: var(--red-800);
+  border-bottom-color: var(--red-800);
+  font-weight: 700;
+  background: var(--red-50);
+}
+.gnb-tab-icon { font-size: 13px; }
+.gnb-step {
+  font-size: 9px;
+  font-weight: 700;
+  background: var(--red-800);
+  color: #fff;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.gnb-tab:not(.on) .gnb-step { background: var(--gray-300); color: var(--gray-500); }
+
+/* ──────────────────────────────────────────
+   BREADCRUMB
+────────────────────────────────────────── */
+.breadcrumb {
+  background: var(--white);
+  border-bottom: 1px solid var(--gray-200);
+  padding: 0 28px;
+}
+.breadcrumb-inner {
+  max-width: 1600px;
+  margin: 0 auto;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--gray-500);
+}
+.bc-sep { color: var(--gray-300); font-size: 10px; }
+.bc-cur { color: var(--red-700); font-weight: 600; }
+
+/* ──────────────────────────────────────────
+   MAIN WRAP
+────────────────────────────────────────── */
+.wrap {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 20px 28px 60px;
+}
+.pnl { display: none; animation: fadeUp .2s ease; }
+.pnl.on { display: block; }
+@keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ──────────────────────────────────────────
+   SECTION HEADER
+────────────────────────────────────────── */
+.sec-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.sec-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--gray-900);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sec-title::before {
+  content: '';
+  width: 3px;
+  height: 16px;
+  background: var(--red-700);
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.sec-desc { font-size: 11px; color: var(--gray-500); }
+
+/* ──────────────────────────────────────────
+   KPI CARDS
+────────────────────────────────────────── */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 14px;
+  margin-bottom: 20px;
+}
+.kpi-card {
+  background: var(--white);
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-md);
+  padding: 18px 20px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  transition: var(--transition);
+}
+.kpi-card:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
+.kpi-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+}
+.kpi-card.red::before { background: linear-gradient(90deg, var(--red-800), var(--red-500)); }
+.kpi-card.green::before { background: linear-gradient(90deg, var(--green-700), var(--green-600)); }
+.kpi-card.amber::before { background: linear-gradient(90deg, var(--amber-700), #f59e0b); }
+.kpi-card.blue::before { background: linear-gradient(90deg, var(--blue-700), #3b82f6); }
+.kpi-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--gray-500);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+.kpi-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--gray-400);
+  letter-spacing: -0.5px;
+}
+.kpi-value.loaded { color: var(--gray-900); }
+.kpi-sub {
+  font-size: 10px;
+  color: var(--gray-400);
+  margin-top: 4px;
+}
+.kpi-bar {
+  height: 3px;
+  background: var(--gray-100);
+  border-radius: 2px;
+  margin-top: 10px;
+  overflow: hidden;
+}
+.kpi-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width .6s cubic-bezier(.4,0,.2,1);
+}
+
+/* ──────────────────────────────────────────
+   CARD
+────────────────────────────────────────── */
+.card {
+  background: var(--white);
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--gray-100);
+  background: var(--gray-50);
+}
+.card-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--gray-800);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.card-title-icon {
+  width: 22px;
+  height: 22px;
+  background: var(--red-50);
+  border: 1px solid var(--red-100);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.card-body { padding: 18px 20px; }
+.card-footer {
+  padding: 10px 20px;
+  border-top: 1px solid var(--gray-100);
+  background: var(--gray-50);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* ──────────────────────────────────────────
+   FORM
+────────────────────────────────────────── */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 14px;
+}
+.form-group { display: flex; flex-direction: column; gap: 5px; }
+.form-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--gray-600);
+  letter-spacing: 0.2px;
+}
+.form-control {
+  background: var(--white);
+  border: 1px solid var(--gray-300);
+  border-radius: var(--radius-sm);
+  color: var(--gray-800);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 8px 11px;
+  outline: none;
+  transition: var(--transition);
+}
+.form-control:focus {
+  border-color: var(--red-600);
+  box-shadow: 0 0 0 3px rgba(185,28,28,.08);
+}
+input[type=number].form-control { font-family: 'JetBrains Mono', monospace; }
+select.form-control { cursor: pointer; }
+
+/* ──────────────────────────────────────────
+   UPLOAD ZONE
+────────────────────────────────────────── */
+.upload-zone {
+  border: 2px dashed var(--gray-300);
+  border-radius: var(--radius-md);
+  padding: 36px 24px;
+  text-align: center;
+  cursor: pointer;
+  transition: var(--transition);
+  background: var(--gray-50);
+  position: relative;
+}
+.upload-zone:hover {
+  border-color: var(--red-500);
+  background: var(--red-50);
+}
+.upload-zone.drag {
+  border-color: var(--red-600);
+  background: var(--red-50);
+  box-shadow: 0 0 0 4px rgba(185,28,28,.06);
+}
+.upload-icon-wrap {
+  width: 56px;
+  height: 56px;
+  background: var(--white);
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-lg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  margin: 0 auto 14px;
+  box-shadow: var(--shadow-sm);
+}
+.upload-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--gray-800);
+  margin-bottom: 6px;
+}
+.upload-desc {
+  font-size: 11px;
+  color: var(--gray-500);
+  line-height: 1.7;
+}
+.upload-badges {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+.upload-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 20px;
+  border: 1px solid;
+}
+.upload-badge.red { background: var(--red-50); color: var(--red-700); border-color: var(--red-100); }
+.upload-badge.green { background: var(--green-50); color: var(--green-700); border-color: var(--green-100); }
+.upload-badge.gray { background: var(--gray-100); color: var(--gray-600); border-color: var(--gray-200); }
+
+/* ──────────────────────────────────────────
+   CODE BLOCK
+────────────────────────────────────────── */
+.code-block {
+  background: #1e2a3a;
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: #a8b8cc;
+  line-height: 1.8;
+  overflow-x: auto;
+  white-space: pre;
+  margin-top: 14px;
+}
+.code-block .c-key { color: #93c5fd; }
+.code-block .c-val { color: #86efac; }
+.code-block .c-cmt { color: #4b5563; }
+
+/* ──────────────────────────────────────────
+   BUTTONS
+────────────────────────────────────────── */
+.btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
+.btn {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 8px 18px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-family: inherit;
+  border: 1px solid transparent;
+  transition: var(--transition);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.btn-primary {
+  background: var(--red-800);
+  color: #fff;
+  border-color: var(--red-900);
+}
+.btn-primary:hover { background: var(--red-900); box-shadow: var(--shadow-md); }
+.btn-secondary {
+  background: var(--white);
+  color: var(--gray-700);
+  border-color: var(--gray-300);
+}
+.btn-secondary:hover { border-color: var(--red-500); color: var(--red-700); background: var(--red-50); }
+.btn-success { background: var(--green-700); color: #fff; border-color: #166534; }
+.btn-success:hover { background: #166534; }
+
+/* ──────────────────────────────────────────
+   TABLES
+────────────────────────────────────────── */
+.table-wrap { overflow-x: auto; border-radius: var(--radius-md); border: 1px solid var(--gray-200); }
+.data-table { width: 100%; border-collapse: collapse; min-width: 700px; }
+.data-table thead th {
+  background: var(--red-800);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  padding: 10px 13px;
+  text-align: right;
+  border-right: 1px solid rgba(255,255,255,.08);
+}
+.data-table thead th:first-child { text-align: left; }
+.data-table tbody tr { border-bottom: 1px solid var(--gray-100); transition: background .1s; }
+.data-table tbody tr:hover { background: var(--red-50); }
+.data-table tbody tr.group-row td {
+  background: var(--gray-50);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--red-700);
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  padding: 7px 13px;
+  border-top: 1px solid var(--gray-200);
+}
+.data-table tbody tr.total-row td {
+  background: var(--red-50);
+  font-weight: 700;
+  border-top: 2px solid var(--red-700);
+  color: var(--red-800);
+}
+.data-table td {
+  padding: 9px 13px;
+  font-size: 11px;
+  color: var(--gray-700);
+  text-align: right;
+}
+.data-table td:first-child { text-align: left; color: var(--gray-900); }
+.mono { font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+
+/* ──────────────────────────────────────────
+   STATUS / ALERTS
+────────────────────────────────────────── */
+.alert {
+  border-radius: var(--radius-sm);
+  padding: 11px 15px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  line-height: 1.6;
+  border: 1px solid;
+}
+.alert-success { background: var(--green-50); border-color: var(--green-100); color: #166534; }
+.alert-warning { background: var(--amber-50); border-color: var(--amber-100); color: var(--amber-700); }
+.alert-danger { background: var(--red-50); border-color: var(--red-100); color: var(--red-700); }
+.alert-info { background: var(--blue-50); border-color: var(--blue-100); color: var(--blue-700); }
+
+.status-bar {
+  padding: 10px 15px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 500;
+  margin-bottom: 12px;
+  border: 1px solid;
+}
+.status-ok { background: var(--green-50); border-color: var(--green-100); color: #166534; }
+.status-info { background: var(--blue-50); border-color: var(--blue-100); color: var(--blue-700); }
+.status-warn { background: var(--amber-50); border-color: var(--amber-100); color: var(--amber-700); }
+
+/* ──────────────────────────────────────────
+   CHIPS
+────────────────────────────────────────── */
+.chip { display: inline-flex; align-items: center; font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 20px; border: 1px solid; margin-left: 4px; }
+.chip-ok { background: var(--green-50); color: var(--green-700); border-color: var(--green-100); }
+.chip-warn { background: var(--amber-50); color: var(--amber-700); border-color: var(--amber-100); }
+.chip-err { background: var(--red-50); color: var(--red-700); border-color: var(--red-100); }
+
+/* ──────────────────────────────────────────
+   MAPPING
+────────────────────────────────────────── */
+.map-grid { display: grid; gap: 6px; }
+.map-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1.5fr 70px;
+  gap: 10px;
+  align-items: center;
+  background: var(--gray-50);
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  transition: var(--transition);
+}
+.map-row:hover { border-color: var(--gray-300); background: var(--white); box-shadow: var(--shadow-sm); }
+.map-row.header { background: transparent; border: none; padding: 3px 14px; }
+.map-row.header span { font-size: 9px; font-weight: 700; color: var(--gray-400); text-transform: uppercase; letter-spacing: 0.5px; }
+.map-src { font-size: 12px; font-weight: 600; color: var(--gray-800); }
+.map-sample { font-size: 10px; color: var(--gray-400); font-family: 'JetBrains Mono', monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map-select {
+  background: var(--white);
+  border: 1px solid var(--gray-300);
+  border-radius: var(--radius-sm);
+  color: var(--gray-800);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 6px 8px;
+  outline: none;
+  width: 100%;
+  transition: var(--transition);
+}
+.map-select:focus { border-color: var(--red-600); box-shadow: 0 0 0 3px rgba(185,28,28,.08); }
+.map-select.matched { border-color: var(--green-600); background: var(--green-50); }
+.map-cnt { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--red-700); font-weight: 700; text-align: right; }
+
+/* ──────────────────────────────────────────
+   RANGE VIS
+────────────────────────────────────────── */
+.range-item {
+  padding: 14px 16px;
+  background: var(--white);
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-sm);
+  margin-bottom: 8px;
+  transition: var(--transition);
+}
+.range-item:hover { border-color: var(--gray-300); box-shadow: var(--shadow-sm); }
+.range-track {
+  position: relative;
+  height: 12px;
+  background: var(--gray-100);
+  border-radius: 6px;
+  margin-top: 8px;
+  overflow: hidden;
+}
+.range-fill { position: absolute; top: 0; bottom: 0; background: rgba(185,28,28,.18); border-radius: 6px; }
+.range-avg { position: absolute; top: 1px; bottom: 1px; width: 2px; background: var(--red-700); border-radius: 1px; }
+.range-lim { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--red-400); }
+
+/* ──────────────────────────────────────────
+   CHARTS
+────────────────────────────────────────── */
+.chart-box {
+  background: var(--white);
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-md);
+  padding: 18px 20px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow-sm);
+}
+.chart-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--gray-700);
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.chart-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+.chart-box.full { grid-column: 1/-1; }
+
+/* ──────────────────────────────────────────
+   REWARD BOX
+────────────────────────────────────────── */
+.reward-box {
+  background: linear-gradient(135deg, var(--red-50) 0%, #fff 100%);
+  border: 1px solid var(--red-100);
+  border-radius: var(--radius-md);
+  padding: 18px 20px;
+  margin-bottom: 16px;
+}
+.reward-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--red-800);
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ──────────────────────────────────────────
+   LOGIN SCREEN
+────────────────────────────────────────── */
+.login-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: linear-gradient(160deg, #f4f6f9 0%, #eef0f5 100%);
+  padding: 20px;
+  position: relative;
+  overflow: hidden;
+}
+.login-screen::before {
+  content: '';
+  position: absolute;
+  top: -200px; right: -200px;
+  width: 600px; height: 600px;
+  background: radial-gradient(circle, rgba(139,28,28,.06) 0%, transparent 65%);
+  border-radius: 50%;
+}
+.login-screen::after {
+  content: '';
+  position: absolute;
+  bottom: -150px; left: -150px;
+  width: 400px; height: 400px;
+  background: radial-gradient(circle, rgba(30,42,58,.05) 0%, transparent 65%);
+  border-radius: 50%;
+}
+.login-card {
+  background: var(--white);
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-lg);
+  padding: 44px 40px;
+  width: 100%;
+  max-width: 420px;
+  box-shadow: var(--shadow-lg);
+  position: relative;
+  z-index: 1;
+}
+.login-logo-area {
+  text-align: center;
+  margin-bottom: 20px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--gray-100);
+}
+.login-knu-logo {
+  height: 34px;
+  object-fit: contain;
+  display: block;
+  margin: 0 auto 12px;
+}
+.login-knu-fallback { display: none; font-size: 16px; font-weight: 700; color: var(--red-800); margin-bottom: 10px; letter-spacing: 2px; }
+.login-org {
+  font-family: 'KoPubWorld Dotum Medium', 'Noto Sans KR', sans-serif;
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--gray-900);
+  letter-spacing: 3px;
+  margin-top: 4px;
+  line-height: 1.5;
+}
+.login-dot-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0;
+}
+.login-dot-line::before, .login-dot-line::after {
+  content: ''; flex: 1; height: 1px; background: var(--gray-200);
+}
+.login-dot-line span { font-size: 9px; color: var(--gray-300); letter-spacing: 2px; }
+.login-lab {
+  font-family: 'KoPubWorld Dotum Medium', 'Noto Sans KR', sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--gray-500);
+  letter-spacing: 1.2px;
+  line-height: 1.6;
+  margin-top: 0;
+}
+.login-title-area { text-align: center; margin-bottom: 24px; }
+.login-icon { font-size: 36px; margin-bottom: 10px; }
+.login-system-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--gray-900);
+  letter-spacing: -0.3px;
+  margin-bottom: 5px;
+  line-height: 1.6;
+}
+.login-system-sub { font-size: 12px; color: var(--gray-500); line-height: 1.6; }
+.login-btn {
+  width: 100%;
+  padding: 13px 20px;
+  background: var(--white);
+  border: 1px solid var(--gray-300);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gray-700);
+  cursor: pointer;
+  transition: var(--transition);
+  box-shadow: var(--shadow-sm);
+}
+.login-btn:hover {
+  border-color: var(--gray-400);
+  box-shadow: var(--shadow-md);
+  background: var(--gray-50);
+}
+.login-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.login-error {
+  margin-top: 12px;
+  padding: 11px 14px;
+  background: var(--red-50);
+  border: 1px solid var(--red-100);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  color: var(--red-700);
+  display: none;
+  line-height: 1.6;
+}
+.login-notice {
+  margin-top: 18px;
+  text-align: center;
+  font-size: 10px;
+  color: var(--gray-400);
+  line-height: 1.7;
+  border-top: 1px solid var(--gray-100);
+  padding-top: 16px;
+}
+
+/* ──────────────────────────────────────────
+   TBLE WRAP (집계 테이블 스크롤)
+────────────────────────────────────────── */
+.tbl-wrap { overflow-x: auto; max-height: 420px; overflow-y: auto; }
+
+/* ──────────────────────────────────────────
+   FOOTER
+────────────────────────────────────────── */
+.footer {
+  background: var(--white);
+  border-top: 1px solid var(--gray-200);
+  text-align: center;
+  padding: 14px;
+  font-size: 10px;
+  color: var(--gray-400);
+  max-width: 100%;
+  margin-top: auto;
+}
+
+/* ──────────────────────────────────────────
+   RESPONSIVE
+────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .chart-grid { grid-template-columns: 1fr; }
+  .sys-bar { padding: 0 14px; }
+  .hdr-inner, .gnb-inner, .breadcrumb-inner, .wrap { padding-left: 14px; padding-right: 14px; }
+  .sys-bar-links { display: none; }
+  .hdr-system-sub { display: none; }
+}
+</style>
+<body>
+
+<!-- ══════════════════════════════════════════════════
+     로그인 화면 — IRIS 프리미엄 스타일
+══════════════════════════════════════════════════ -->
+<div id="loginScreen" class="login-screen">
+  <div class="login-card">
+
+    <!-- KNU 로고 -->
+    <div class="login-logo-area">
+      <img src="https://www.knu.ac.kr/wbbs/assets/images/common/header_logo_off.png"
+        alt="경북대학교" class="login-knu-logo"
+        onerror="this.style.display='none';document.getElementById('login-logo-fb').style.display='block';">
+      <div id="login-logo-fb" class="login-knu-fallback">경북대학교</div>
+      <div class="login-org">경북대학교 IT대학</div>
+      <div class="login-dot-line"><span>· · ·</span></div>
+      <div class="login-lab">Control and Renewable Energy Lab</div>
+    </div>
+
+    <!-- 시스템명 -->
+    <div class="login-title-area">
+      <div style="display:flex;align-items:center;justify-content:center;gap:12px;margin-bottom:8px;">
+        <svg width="44" height="44" viewBox="0 0 40 40" fill="none" style="flex-shrink:0;">
+          <rect width="40" height="40" rx="10" fill="#fef2f2"/>
+          <line x1="20" y1="32" x2="20" y2="20" stroke="#8b1c1c" stroke-width="1.8" stroke-linecap="round"/>
+          <line x1="16" y1="33" x2="24" y2="33" stroke="#8b1c1c" stroke-width="1.5" stroke-linecap="round"/>
+          <path d="M20 20 C19 16 17 11 20 9 C21 13 22 17 20 20Z" fill="#8b1c1c" opacity=".9"/>
+          <path d="M20 20 C24 20 29 19 30 22 C27 23 23 22 20 20Z" fill="#8b1c1c" opacity=".7"/>
+          <path d="M20 20 C16 21 11 22 10 19 C13 17 17 18 20 20Z" fill="#8b1c1c" opacity=".55"/>
+          <circle cx="20" cy="20" r="2.5" fill="#8b1c1c"/>
+          <circle cx="20" cy="20" r="1.2" fill="#fff"/>
+        </svg>
+        <div class="login-system-name" style="text-align:left;">연구과제 예산 집행<br>관리 및 모니터링</div>
+      </div>
+    </div>
+
+    <!-- Google 로그인 버튼 -->
+    <button id="loginBtn" class="login-btn" onclick="doGoogleLogin()">
+      <svg width="18" height="18" viewBox="0 0 48 48" style="flex-shrink:0;">
+        <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+        <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+        <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+        <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.36-8.16 2.36-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+      </svg>
+      Google 계정으로 로그인
+    </button>
+
+    <div id="login-error" class="login-error"></div>
+
+    <div class="login-notice">
+      허용된 Google 계정만 접속 가능합니다.<br>
+      접근 권한 문의: 연구책임자 또는 IT1-805호 연구실
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     메인 앱 — IRIS 3단 헤더 구조
+══════════════════════════════════════════════════ -->
+<div id="appScreen" style="display:none;">
+
+  <!-- ① 최상단 시스템 바 (IRIS 다크바) -->
+  <div class="sys-bar">
+    <div class="sys-bar-inner">
+      <div class="sys-bar-links">
+        <span class="sys-bar-link">연구과제 예산 관리</span>
+        <span class="sys-bar-link">KETEP 지침</span>
+        <span class="sys-bar-link">KNU 산학협력단</span>
+      </div>
+      <div class="sys-bar-user">
+        <strong id="userName">사용자</strong>
+        <span class="sys-bar-sep">|</span>
+        <span id="userEmail"></span>
+        <span class="sys-bar-sep">|</span>
+        <button class="sys-bar-logout" onclick="doLogout()">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          로그아웃
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ② 메인 헤더 -->
+  <div class="hdr">
+    <div class="hdr-inner">
+      <div class="hdr-logo-area">
+        <svg width="40" height="40" viewBox="0 0 40 40" fill="none" style="flex-shrink:0;">
+          <rect width="40" height="40" rx="8" fill="#fef2f2"/>
+          <line x1="20" y1="32" x2="20" y2="20" stroke="#8b1c1c" stroke-width="1.8" stroke-linecap="round"/>
+          <line x1="16" y1="33" x2="24" y2="33" stroke="#8b1c1c" stroke-width="1.5" stroke-linecap="round"/>
+          <path d="M20 20 C19 16 17 11 20 9 C21 13 22 17 20 20Z" fill="#8b1c1c" opacity=".9"/>
+          <path d="M20 20 C24 20 29 19 30 22 C27 23 23 22 20 20Z" fill="#8b1c1c" opacity=".7"/>
+          <path d="M20 20 C16 21 11 22 10 19 C13 17 17 18 20 20Z" fill="#8b1c1c" opacity=".55"/>
+          <circle cx="20" cy="20" r="2.5" fill="#8b1c1c"/>
+          <circle cx="20" cy="20" r="1.2" fill="#fff"/>
+        </svg>
+        <div style="display:flex;flex-direction:column;line-height:1.3;">
+          <span style="font-family:'KoPubWorld Dotum Medium','Noto Sans KR',sans-serif;font-size:15px;font-weight:700;color:#8b1c1c;letter-spacing:-.3px;">CRE Lab</span>
+          <span style="font-size:8px;color:#9ca3af;letter-spacing:.3px;margin-top:2px;">Control &amp; Renewable Energy</span>
+          <span style="font-size:9px;font-weight:600;color:#6b7280;margin-top:1px;">경북대학교 IT1-805</span>
+        </div>
+        <div class="hdr-logo-divider"></div>
+      </div>
+      <div class="hdr-title-area">
+        <div class="hdr-system-name">
+          연구과제 예산 집행 관리 및 모니터링
+          <span class="hdr-system-badge">KNU · KETEP</span>
+        </div>
+        <div class="hdr-system-sub">비목별 집행 현황 · 상시 이상 징후 탐지 · 적정범위 산출 · 연구수당 진단</div>
+      </div>
+      <!-- 사용자 아바타 (로그인 후 표시) -->
+      <div id="userAvatarCircle" style="display:none;width:32px;height:32px;border-radius:50%;background:#fef2f2;border:2px solid #fecaca;display:none;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#8b1c1c;margin-left:auto;flex-shrink:0;font-family:'Noto Sans KR',sans-serif;"></div>
+      <img id="userAvatar" src="" alt=""
+        style="display:none;width:32px;height:32px;border-radius:50%;border:2px solid #fecaca;margin-left:auto;flex-shrink:0;">
+    </div>
+  </div>
+
+  <!-- ③ GNB 탭 -->
+  <div class="gnb">
+    <div class="gnb-inner">
+      <div class="gnb-tab on" onclick="sw(0)"><span class="gnb-step">1</span> 데이터 업로드</div>
+      <div class="gnb-tab" onclick="sw(1)"><span class="gnb-step">2</span> 컬럼 매핑</div>
+      <div class="gnb-tab" onclick="sw(2)"><span class="gnb-step">3</span> 집계 확인</div>
+      <div class="gnb-tab" onclick="sw(3)"><span class="gnb-step">4</span> 적정 집행범위</div>
+      <div class="gnb-tab" onclick="sw(4)"><span class="gnb-step">5</span> 패턴 분석</div>
+      <div class="gnb-tab" onclick="sw(5)"><span class="gnb-step">6</span> 연구수당 진단</div>
+      <div class="gnb-tab" onclick="sw(6)"><span class="gnb-step">7</span> 이상 징후</div>
+    </div>
+  </div>
+
+  <!-- 브레드크럼 -->
+  <div class="breadcrumb">
+    <div class="breadcrumb-inner">
+      <span>CRE Lab</span>
+      <span class="bc-sep">›</span>
+      <span>연구비 집행 관리</span>
+      <span class="bc-sep">›</span>
+      <span class="bc-cur" id="bc-cur">데이터 업로드</span>
+    </div>
+  </div>
+
+</div>
+
+<div class="wrap">
+
+<!-- ═══ TAB 0: 업로드 ═══ -->
+<div id="p0" class="pnl on">
+
+  <!-- 과제 기본정보 카드 -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">
+        <div class="card-title-icon">⚙️</div>
+        과제 기본 정보
+      </div>
+    </div>
+    <div class="card-body">
+      <div class="form-grid">
+        <div class="form-group" style="grid-column:span 2;">
+          <label class="form-label">과제명</label>
+          <input id="pname" type="text" class="form-control" value="초대용량풍력혁신연구센터 인력양성사업">
+        </div>
+        <div class="form-group"><label class="form-label">분석 시작 (년-월)</label><input id="y1s" type="month" class="form-control" value="2022-04"></div>
+        <div class="form-group"><label class="form-label">분석 종료 (년-월)</label><input id="y3e" type="month" class="form-control" value="2025-03"></div>
+        <div class="form-group"><label class="form-label">연간 협약 연구비 (천원)</label><input id="annBud" type="number" class="form-control" value="500000"></div>
+        <div class="form-group"><label class="form-label">집행 목표율 (%)</label><input id="tgtRate" type="number" class="form-control" value="80"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 파일 업로드 카드 -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">
+        <div class="card-title-icon">📂</div>
+        증빙 건별 지출내역 파일 업로드
+      </div>
+    </div>
+    <div class="card-body">
+      <div class="upload-zone" id="dz" onclick="document.getElementById('fi').click()"
+        ondragover="event.preventDefault();this.classList.add('drag')"
+        ondragleave="this.classList.remove('drag')"
+        ondrop="onDrop(event)">
+        <div class="upload-icon-wrap">📂</div>
+        <div class="upload-title">건별 지출내역 파일을 드래그하거나 클릭하여 업로드</div>
+        <div class="upload-desc">
+          ✅ <strong>Excel (.xlsx, .xls)</strong> — 한글 포함 자동 처리 (SheetJS)<br>
+          ✅ <strong>CSV / TXT</strong> — UTF-8 · EUC-KR 자동 감지
+        </div>
+        <div class="upload-badges">
+          <span class="upload-badge red">날짜 컬럼</span>
+          <span class="upload-badge red">비목/항목명 컬럼</span>
+          <span class="upload-badge red">금액 컬럼</span>
+          <span class="upload-badge gray">적요/내용 (선택)</span>
+          <span class="upload-badge green">컬럼명 달라도 자동 매핑</span>
+        </div>
+      </div>
+      <input type="file" id="fi" accept=".csv,.txt,.xlsx,.xls" onchange="onFileSelect(this)" style="display:none">
+
+      <div class="code-block">지출일자,비목,금액,적요,증빙번호
+2022-04-05,인건비(전임교원),8500000,4월 교수인건비,R2022-001
+2022-04-10,학생인건비,1020000,박사과정 홍길동 4월,R2022-002
+2022-04-15,연구재료비,320000,시약 구입,R2022-003
+2022-05-03,연구수당,250000,4월분 연구수당 지급,R2022-004
+
+※ 컬럼명·순서·금액 단위(원/천원) 모두 다음 단계에서 설정 가능</div>
+
+      <div class="btn-group" style="margin-top:14px;">
+        <button class="btn btn-primary" onclick="loadSample()">📋 샘플 데이터로 체험</button>
+        <button class="btn btn-secondary" onclick="dlTemplate()">⬇ CSV 템플릿 다운로드</button>
+      </div>
+      <div id="up-status" style="margin-top:10px;"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ TAB 1: 컬럼 매핑 ═══ -->
+<div id="p1" class="pnl">
+  <div class="card">
+    <div class="card-title" style="margin-bottom:14px;">🗂 컬럼 역할 지정</div>
+    <p style="font-size:10px;color:var(--tx3);margin-bottom:14px;">
+      업로드된 파일의 컬럼을 아래 역할에 맞게 지정하세요. 자동 감지된 항목은 초록색으로 표시됩니다.
+    </p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:18px;">
+      <div class="form-group"><label>📅 날짜 컬럼</label><select id="col-date" class="map-select"></select></div>
+      <div class="form-group"><label>🗂 비목/항목 컬럼</label><select id="col-item" class="map-select"></select></div>
+      <div class="form-group"><label>💰 금액 컬럼</label><select id="col-amt" class="map-select"></select></div>
+      <div class="form-group"><label>📝 적요 컬럼 (선택)</label><select id="col-desc" class="map-select"></select></div>
+      <div class="form-group"><label>💴 금액 단위</label>
+        <select id="amt-unit" class="map-select">
+          <option value="1">원 (÷1000 → 천원)</option>
+          <option value="1000" selected>천원 (그대로)</option>
+          <option value="10000">만원 (×10 → 천원)</option>
+        </select>
+      </div>
+      <div class="form-group"><label>📅 날짜 형식</label>
+        <select id="date-fmt" class="map-select">
+          <option value="auto">자동 감지</option>
+          <option value="YYYY-MM-DD">YYYY-MM-DD</option>
+          <option value="YYYY/MM/DD">YYYY/MM/DD</option>
+          <option value="YYYYMMDD">YYYYMMDD</option>
+          <option value="YY-MM-DD">YY-MM-DD</option>
+          <option value="MM/DD/YYYY">MM/DD/YYYY</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="card-title" style="margin-bottom:14px;">🏷 비목 자동 분류 — 소스 값 → 비목 매핑</div>
+    <p style="font-size:10px;color:var(--tx3);margin-bottom:12px;">
+      파일에서 발견된 고유 비목/항목명입니다. 각각이 어느 비목에 해당하는지 확인·수정하세요.
+    </p>
+    <div class="map-grid">
+      <div class="map-row header">
+        <span>파일 내 값</span><span>샘플</span><span>매핑 비목</span><span>건수</span>
+      </div>
+      <div id="mapping-rows"></div>
+    </div>
+    <div class="btn-group">
+      <button class="btn btn-primary" onclick="applyMapping()">✅ 매핑 적용 → 집계</button>
+      <button class="btn btn-secondary" onclick="autoRemap()">🔄 자동 재매핑</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ TAB 2: 집계 확인 ═══ -->
+<div id="p2" class="pnl">
+  <div id="agg-status" style="margin-bottom:12px;"></div>
+  <div class="kpi-grid" id="agg-kpi"></div>
+  <div class="card">
+    <div class="card-title" style="margin-bottom:14px;">📋 비목별 월별 집계 결과</div>
+    <div class="btn-group">
+      <button class="btn btn-secondary" onclick="exportAgg()">📊 집계 결과 CSV 저장</button>
+      <button class="btn btn-secondary" onclick="sw(3)">➡ 적정범위 분석으로</button>
+    </div>
+    <div class="tbl-wrap table-wrap"><table class="data-table" id="aggTable"></table></div>
+  </div>
+  <div class="card">
+    <div class="card-title" style="margin-bottom:14px;">🔍 원본 데이터 미리보기 (최근 50건)</div>
+    <div class="tbl-wrap table-wrap"><table class="data-table" id="previewTable"></table></div>
+  </div>
+</div>
+
+<!-- ═══ TAB 3: 적정범위 ═══ -->
+<div id="p3" class="pnl">
+  <div id="range-alerts" style="margin-bottom:12px;"></div>
+  <div class="kpi-grid" id="range-kpi"></div>
+  <div class="card">
+    <div class="card-title" style="margin-bottom:14px;">📐 비목별 월 적정 집행범위 (평균 ± 표준편차)</div>
+    <p style="font-size:10px;color:var(--tx3);margin-bottom:12px;">
+      3개년 실적 기반 통계 — <span style="color:var(--knu-red)">하한: 평균 − 1σ</span> &nbsp;|&nbsp;
+      <span style="color:var(--knu-red)">평균</span> &nbsp;|&nbsp;
+      <span style="color:var(--y3)">상한: 평균 + 1σ</span> &nbsp;|&nbsp;
+      <span style="color:var(--er-tx)">규정 한도 (자동 적용)</span>
+    </p>
+    <div id="rangeVis"></div>
+  </div>
+  <div class="card">
+    <div class="card-title" style="margin-bottom:14px;">📊 월별 총 집행액 vs 적정범위</div>
+    <canvas id="rangeChart" height="90"></canvas>
+  </div>
+</div>
+
+<!-- ═══ TAB 4: 패턴 ═══ -->
+<div id="p4" class="pnl">
+  <div class="chart-grid">
+    <div class="chart-box">
+      <div class="chart-title">📈 연도별 비목 집행 추이</div>
+      <canvas id="trendChart" height="220"></canvas>
+    </div>
+    <div class="chart-box">
+      <div class="chart-title">🥧 비목별 집행 비중 (3개년)</div>
+      <canvas id="pieChart" height="220"></canvas>
+    </div>
+    <div class="chart-box full">
+      <div class="chart-title">📅 월별 집행 시계열 (주요 비목)</div>
+      <canvas id="tsChart" height="90"></canvas>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title" style="margin-bottom:14px;">📊 집행 패턴 요약</div>
+    <div id="patSummary"></div>
+  </div>
+</div>
+
+<!-- ═══ TAB 5: 연구수당 ═══ -->
+<div id="p5" class="pnl">
+  <div class="reward-box">
+    <div class="reward-title">🏆 연구수당 적정 지급 진단 — 국가연구개발혁신법 기준</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin-bottom:14px;">
+      <div style="background:rgba(124,58,237,.1);border:1px solid rgba(124,58,237,.2);border-radius:8px;padding:12px;font-size:10px;line-height:1.8;">
+        <div style="font-weight:700;color:var(--p3);margin-bottom:4px;">① 계상 상한</div>
+        <div style="color:var(--tx2);">(인건비+학생인건비+미지급인건비) × <strong style="color:var(--y3);">20%</strong></div>
+      </div>
+      <div style="background:rgba(191,148,26,.09);border:1px solid rgba(6,182,212,.2);border-radius:8px;padding:12px;font-size:10px;line-height:1.8;">
+        <div style="font-weight:700;color:var(--knu-red);margin-bottom:4px;">② 지급 가능 비율</div>
+        <div style="color:var(--tx2);">직접비 집행률 + <strong style="color:var(--y3);">20%</strong> (최대 100%)</div>
+      </div>
+      <div style="background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.2);border-radius:8px;padding:12px;font-size:10px;line-height:1.8;">
+        <div style="font-weight:700;color:var(--knu-red);margin-bottom:4px;">③ 1인 상한</div>
+        <div style="color:var(--tx2);">실지급액의 <strong style="color:var(--y3);">70%</strong> 초과 불가 (2인 이상 시)</div>
+      </div>
+      <div style="background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:8px;padding:12px;font-size:10px;line-height:1.8;">
+        <div style="font-weight:700;color:var(--er-tx);margin-bottom:4px;">④ 소급 불인정</div>
+        <div style="color:var(--tx2);">집행비율 초과 시 다음 산식 초과분 <strong style="color:var(--er-tx);">반납</strong></div>
+      </div>
+    </div>
+    <div class="kpi-grid" id="rwKPI" style="margin-bottom:0;"></div>
+  </div>
+  <div class="card">
+    <div class="card-title" style="margin-bottom:14px;">📅 월별 연구수당 지급 적정 시점</div>
+    <div class="tbl-wrap table-wrap"><table class="data-table" id="rwTable"></table></div>
+  </div>
+  <div class="chart-box">
+    <div class="chart-title">직접비 집행률 vs 연구수당 지급가능비율 vs 실집행</div>
+    <canvas id="rwChart" height="90"></canvas>
+  </div>
+</div>
+
+<!-- ═══ TAB 6: 이상징후 ═══ -->
+<div id="p6" class="pnl">
+  <div class="card">
+    <div class="card-title" style="margin-bottom:14px;">🚨 집행 이상 징후</div>
+    <div id="anomList"></div>
+  </div>
+  <div class="card">
+    <div class="card-title" style="margin-bottom:14px;">✅ KETEP 비목별 규정 준수</div>
+    <div id="compList"></div>
+  </div>
+  <div class="card">
+    <div class="card-title" style="margin-bottom:14px;">💡 종합 권고</div>
+    <div id="recList"></div>
+  </div>
+</div>
+
+</div><!-- /wrap -->
+<div class="footer">⚠️ 본 분석은 참고용입니다. 실제 집행은 협약서·KETEP 지침·경북대 산학협력단 매뉴얼을 우선 확인하시기 바랍니다.</div>
+
+<script>
+// ═══════════════════════════════════════════════════
+//  비목 정의
+// ═══════════════════════════════════════════════════
+const ITEMS=[
+  {id:'prof',    name:'인건비(전임교원)', grp:'인건비',  clr:'#991b1b', lim:null},
+  {id:'student', name:'학생인건비',        grp:'인건비',  clr:'#dc2626', lim:null},
+  {id:'unpaid',  name:'미지급인건비',       grp:'인건비',  clr:'#bf941a', lim:null},
+  {id:'reward',  name:'연구수당',           grp:'인건비',  clr:'#a78bfa', lim:{t:'reward'}},
+  {id:'material',name:'연구재료비',         grp:'직접비',  clr:'#22c55e', lim:null},
+  {id:'equip',   name:'연구시설·장비비',    grp:'직접비',  clr:'#4ade80', lim:{t:'pct',base:'direct',p:.30}},
+  {id:'travel',  name:'국내외 여비',        grp:'직접비',  clr:'#f59e0b', lim:{t:'pct',base:'direct',p:.10}},
+  {id:'activity',name:'연구활동비',         grp:'직접비',  clr:'#fbbf24', lim:{t:'pct',base:'direct',p:.10}},
+  {id:'outsource',name:'위탁연구개발비',    grp:'직접비',  clr:'#fb923c', lim:{t:'pct',base:'total',p:.40}},
+  {id:'other',   name:'기타직접비',         grp:'직접비',  clr:'#f97316', lim:{t:'pct',base:'direct',p:.20}},
+  {id:'indirect',name:'간접비',             grp:'간접비',  clr:'#8b5cf6', lim:null},
+  {id:'tech',    name:'연구성과활용지원비', grp:'성과활용',clr:'#ec4899', lim:{t:'pct',base:'direct',p:.05}},
+];
+
+// 비목 키워드 매핑 (한국어 유사어 포함)
+const KW={
+  prof:   ['전임교원','교원인건비','인건비','교수인건비','연구책임자인건비','책임자인건비','연구원인건비','연구비인건비'],
+  student:['학생인건비','학생 인건비','대학원생','석사','박사과정','학생연구원','RA'],
+  unpaid: ['미지급','미지급인건비'],
+  reward: ['연구수당','수당'],
+  material:['재료비','재료','소모품','시약','소재','원자재','재료구입'],
+  equip:  ['장비','기자재','설비','시설','장비비','연구장비','연구시설'],
+  travel: ['여비','출장','항공','숙박','교통','여행경비','국외출장','국내출장','해외출장'],
+  activity:['활동비','연구활동','세미나','학회','등록비','학술대회','워크숍'],
+  outsource:['위탁','용역','외주','하도급','위탁연구'],
+  other:  ['기타','기타직접','잡비','수수료','특허','논문게재','기타경비'],
+  indirect:['간접비','오버헤드','간접'],
+  tech:   ['성과활용','기술이전','사업화','성과지원'],
+};
+
+// ═══════════════════════════════════════════════════
+//  전역 상태
+// ═══════════════════════════════════════════════════
+let rawRows=[];     // 파싱된 원본 행
+let headers=[];     // CSV 컬럼명
+let colMap={};      // srcValue -> itemId 매핑
+let aggData={};     // {itemId: {YYYY-MM: 금액}}
+let MONTHS=[];
+let charts={};
+
+// ═══════════════════════════════════════════════════
+//  유틸
+// ═══════════════════════════════════════════════════
+const fmt=n=>isNaN(n)?'-':Math.round(n).toLocaleString('ko-KR');
+const fmtF=(n,d=1)=>isNaN(n)?'-':n.toFixed(d);
+const vn=id=>parseFloat(document.getElementById(id)?.value)||0;
+const vs=id=>document.getElementById(id)?.value||'';
+
+function getMonths(){
+  const s=vs('y1s'),e=vs('y3e');
+  if(!s||!e) return [];
+  const arr=[];let cur=new Date(s+'-01'),end=new Date(e+'-01');
+  while(cur<=end){arr.push(cur.toISOString().slice(0,7));cur.setMonth(cur.getMonth()+1);}
+  return arr;
+}
+
+function parseDate(str,fmt){
+  if(!str) return null;
+  str=String(str).trim();
+  // 자동 감지
+  const patterns=[
+    [/^(\d{4})-(\d{2})-(\d{2})/,  (m)=>`${m[1]}-${m[2]}`],
+    [/^(\d{4})\/(\d{2})\/(\d{2})/,(m)=>`${m[1]}-${m[2]}`],
+    [/^(\d{4})(\d{2})(\d{2})$/,   (m)=>`${m[1]}-${m[2]}`],
+    [/^(\d{2})-(\d{2})-(\d{2})/,  (m)=>`20${m[1]}-${m[2]}`],
+    [/^(\d{2})\/(\d{2})\/(\d{4})/,(m)=>`${m[3]}-${String(m[1]).padStart(2,'0')}`],
+  ];
+  for(const [re,fn] of patterns){
+    const m=str.match(re);
+    if(m) return fn(m);
+  }
+  return null;
+}
+
+function matchItem(name){
+  if(!name) return null;
+  const n=String(name).trim();
+  for(const [id,kws] of Object.entries(KW)){
+    if(kws.some(k=>n.includes(k))) return id;
+  }
+  return null;
+}
+
+function stats(arr){
+  const a=arr.filter(x=>typeof x==='number'&&x>=0);
+  if(!a.length) return {min:0,max:0,avg:0,std:0,sum:0,n:0};
+  const sum=a.reduce((s,x)=>s+x,0);
+  const avg=sum/a.length;
+  const std=Math.sqrt(a.reduce((s,x)=>s+(x-avg)**2,0)/a.length);
+  return {min:Math.min(...a),max:Math.max(...a),avg,std,sum,n:a.length};
+}
+
+function getAgg(itemId,month){ return aggData[itemId]?.[month]||0; }
+
+// ═══════════════════════════════════════════════════
+//  탭 전환
+// ═══════════════════════════════════════════════════
+function sw(i){
+  const ids=['p0','p1','p2','p3','p4','p5','p6'];
+  const bcNames=['데이터 업로드','컬럼 매핑','집계 확인','적정 집행범위','패턴 분석','연구수당 진단','이상 징후'];
+
+  // 탭 활성화 (구 .tb + 신 .gnb-tab 모두 지원)
+  document.querySelectorAll('.tb, .gnb-tab').forEach((el,j)=>el.classList.toggle('on',j===i));
+  document.querySelectorAll('.pnl').forEach(p=>p.classList.remove('on'));
+  document.getElementById(ids[i]).classList.add('on');
+
+  // 브레드크럼 업데이트
+  const bc = document.getElementById('bc-cur');
+  if(bc) bc.textContent = bcNames[i] || '';
+
+  // 데이터 없으면 분석 탭에서 안내만 표시
+  if(i>=3 && !Object.keys(aggData).length){
+    const msg=`<div class="alert alert-info" style="margin:20px 0;">
+      <span>ℹ️</span>
+      <div><strong>데이터가 없습니다.</strong><br>
+      ① 데이터 업로드 탭에서 파일을 업로드하거나 샘플 데이터를 불러온 후<br>
+      ② 컬럼 매핑 탭에서 <strong>매핑 적용 → 집계</strong> 버튼을 눌러주세요.</div>
+    </div>`;
+    const targets={3:'range-kpi',4:'patSummary',5:'rwKPI',6:'anomList'};
+    if(targets[i]) document.getElementById(targets[i]).innerHTML=msg;
+    return;
+  }
+
+  // 차트가 포함된 탭은 DOM 렌더 후 실행
+  if(i>=3){
+    requestAnimationFrame(()=>{
+      runAnalysis(i);
+      setTimeout(()=>{
+        Object.values(charts).forEach(ch=>{ try{ ch.resize(); }catch(e){} });
+      }, 50);
+    });
+  }
+}
+
+// ═══════════════════════════════════════════════════
+//  파일 처리
+// ═══════════════════════════════════════════════════
+function onDrop(e){
+  e.preventDefault();
+  document.getElementById('dz').classList.remove('drag');
+  const f=e.dataTransfer.files[0];
+  if(f) processFile(f);
+}
+function onFileSelect(inp){ if(inp.files[0]) processFile(inp.files[0]); }
+
+function processFile(file){
+  const ext = file.name.split('.').pop().toLowerCase();
+  const statusEl = document.getElementById('up-status');
+  statusEl.innerHTML = `<div class="status-bar status-info">⏳ 파일 읽는 중... (${file.name})</div>`;
+
+  // ── Excel 처리 (.xlsx / .xls) ──────────────────────
+  if(ext === 'xlsx' || ext === 'xls'){
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        const data = new Uint8Array(e.target.result);
+        const wb = XLSX.read(data, { type:'array', codepage:949 });
+
+        // 첫 번째 시트 사용
+        const ws = wb.Sheets[wb.SheetNames[0]];
+
+        // header:1 → 배열 배열, defval:'' 로 빈 셀 처리
+        const aoa = XLSX.utils.sheet_to_json(ws, { header:1, defval:'' });
+        if(!aoa.length){ statusEl.innerHTML=`<div class="status-bar status-warn">⚠️ 시트가 비어 있습니다.</div>`; return; }
+
+        // 첫 행을 헤더로
+        const hdrs = aoa[0].map(h => String(h).trim()).filter(h => h);
+        const rows = aoa.slice(1).map(row => {
+          const obj = {};
+          hdrs.forEach((h, i) => { obj[h] = row[i] !== undefined ? String(row[i]) : ''; });
+          return obj;
+        }).filter(r => hdrs.some(h => r[h] && r[h].trim()));
+
+        rawRows = rows;
+        headers = hdrs;
+        statusEl.innerHTML = `<div class="status-bar status-ok">✅ Excel <strong>${file.name}</strong> — <strong>${rawRows.length}건</strong> 로드 완료 (시트: ${wb.SheetNames[0]}) | 컬럼: ${headers.join(', ')}</div>`;
+        buildMapping();
+        sw(1);
+      } catch(err){
+        statusEl.innerHTML = `<div class="status-bar status-warn">❌ Excel 파싱 오류: ${err.message}</div>`;
+      }
+    };
+    reader.readAsArrayBuffer(file);
+
+  // ── CSV / TXT 처리 ──────────────────────────────────
+  } else {
+    // 1차: UTF-8 시도
+    const tryParse = (encoding, fallback) => {
+      const reader = new FileReader();
+      reader.onload = e => {
+        Papa.parse(e.target.result, {
+          header:true, skipEmptyLines:true,
+          complete: res => {
+            // 헤더에 깨진 문자(□ 또는 ?) 있으면 EUC-KR로 재시도
+            const broken = res.meta.fields && res.meta.fields.some(f => /[\ufffd\u0000]/.test(f));
+            if(broken && fallback){
+              fallback();
+              return;
+            }
+            rawRows = res.data;
+            headers = res.meta.fields || [];
+            statusEl.innerHTML = `<div class="status-bar status-ok">✅ CSV <strong>${file.name}</strong> — <strong>${rawRows.length}건</strong> 로드 완료 (인코딩: ${encoding}) | 컬럼: ${headers.join(', ')}</div>`;
+            buildMapping();
+            sw(1);
+          },
+          error: () => { if(fallback) fallback(); }
+        });
+      };
+      reader.readAsText(file, encoding);
+    };
+
+    // UTF-8 → 실패시 EUC-KR 자동 재시도
+    tryParse('UTF-8', () => tryParse('EUC-KR', null));
+  }
+}
+
+// ═══════════════════════════════════════════════════
+//  컬럼 매핑 빌드
+// ═══════════════════════════════════════════════════
+function buildMapping(){
+  // 컬럼 셀렉트 채우기
+  ['col-date','col-item','col-amt','col-desc'].forEach(id=>{
+    const el=document.getElementById(id);
+    el.innerHTML='<option value="">— 선택 —</option>'+
+      headers.map(h=>`<option value="${h}">${h}</option>`).join('');
+  });
+
+  // 자동 감지
+  const dateKW=['날짜','일자','일','date','지출일','집행일','결의일','전표일'];
+  const itemKW=['비목','항목','계정','구분','비용항목','item','category'];
+  const amtKW=['금액','금액(원)','집행금액','지출금액','amount','amt','원'];
+  const descKW=['적요','내용','설명','비고','desc','remark'];
+
+  const autoMatch=(kws)=>{
+    for(const h of headers){
+      const lh=h.toLowerCase();
+      if(kws.some(k=>lh.includes(k.toLowerCase()))) return h;
+    }
+    return '';
+  };
+
+  document.getElementById('col-date').value=autoMatch(dateKW);
+  document.getElementById('col-item').value=autoMatch(itemKW);
+  document.getElementById('col-amt').value=autoMatch(amtKW);
+  document.getElementById('col-desc').value=autoMatch(descKW);
+
+  buildItemMappingRows();
+}
+
+function buildItemMappingRows(){
+  const itemCol=vs('col-item');
+  if(!itemCol||!rawRows.length) return;
+
+  // 고유 비목값 추출
+  const srcMap={};
+  rawRows.forEach(r=>{
+    const v=String(r[itemCol]||'').trim();
+    if(v){ srcMap[v]=(srcMap[v]||0)+1; }
+  });
+
+  // 샘플값 추출
+  const sampleMap={};
+  const amtCol=vs('col-amt');
+  rawRows.forEach(r=>{
+    const v=String(r[itemCol]||'').trim();
+    if(v&&!sampleMap[v]) sampleMap[v]=amtCol?String(r[amtCol]||''):'';
+  });
+
+  const el=document.getElementById('mapping-rows');
+  el.innerHTML=Object.entries(srcMap).sort((a,b)=>b[1]-a[1]).map(([src,cnt])=>{
+    const auto=matchItem(src)||'';
+    colMap[src]=auto;
+    const opts=ITEMS.map(i=>`<option value="${i.id}"${auto===i.id?' selected':''}>${i.name}</option>`).join('');
+    return `<div class="map-row">
+      <div><div class="map-src">${src}</div></div>
+      <div class="map-sample">${sampleMap[src]||''}</div>
+      <select class="map-select${auto?' matched':''}" onchange="colMap['${src}']=this.value;this.classList.toggle('matched',!!this.value)">
+        <option value="">— 미분류 —</option>${opts}
+      </select>
+      <div class="map-cnt">${cnt}건</div>
+    </div>`;
+  }).join('');
+}
+
+function autoRemap(){
+  const itemCol=vs('col-item');
+  document.querySelectorAll('#mapping-rows .map-select').forEach(sel=>{
+    const src=sel.closest('.map-row')?.querySelector('.map-src')?.textContent||'';
+    const auto=matchItem(src)||'';
+    sel.value=auto;
+    colMap[src]=auto;
+    sel.classList.toggle('matched',!!auto);
+  });
+}
+
+// ═══════════════════════════════════════════════════
+//  매핑 적용 → 집계
+// ═══════════════════════════════════════════════════
+function applyMapping(){
+  MONTHS=getMonths();
+  if(!MONTHS.length){alert('과제 기간을 먼저 설정하세요.');return;}
+
+  const dateCol=vs('col-date');
+  const itemCol=vs('col-item');
+  const amtCol=vs('col-amt');
+  const unit=parseFloat(vs('amt-unit'))||1;
+
+  if(!dateCol||!itemCol||!amtCol){alert('날짜·비목·금액 컬럼을 모두 지정하세요.');return;}
+
+  aggData={};
+  ITEMS.forEach(item=>{
+    aggData[item.id]={};
+    MONTHS.forEach(m=>aggData[item.id][m]=0);
+  });
+
+  let ok=0,skip=0;
+  rawRows.forEach(row=>{
+    const srcItem=String(row[itemCol]||'').trim();
+    const itemId=colMap[srcItem];
+    if(!itemId){skip++;return;}
+
+    const rawAmt=String(row[amtCol]||'').replace(/[,\s₩원]/g,'');
+    let amt=parseFloat(rawAmt)||0;
+    // 단위 변환 → 천원
+    if(unit===1) amt=amt/1000;       // 원 → 천원
+    else if(unit===10000) amt=amt*10; // 만원 → 천원
+
+    const rawDate=String(row[dateCol]||'').trim();
+    const ym=parseDate(rawDate);
+    if(!ym||!MONTHS.includes(ym)){skip++;return;}
+
+    aggData[itemId][ym]=(aggData[itemId][ym]||0)+amt;
+    ok++;
+  });
+
+  buildAggTab();
+  sw(2);
+  document.getElementById('agg-status').innerHTML=
+    `<div class="status-bar status-ok">✅ 집계 완료 — <strong>${ok}건 집계</strong>, ${skip}건 제외 (미분류·기간 외)</div>`;
+}
+
+// ═══════════════════════════════════════════════════
+//  TAB2: 집계 결과
+// ═══════════════════════════════════════════════════
+function buildAggTab(){
+  MONTHS=getMonths();
+  const annual=vn('annBud');
+  const totalBud=annual*(MONTHS.length/12);
+  const totalExec=ITEMS.reduce((s,item)=>s+MONTHS.reduce((ss,m)=>ss+getAgg(item.id,m),0),0);
+  const execRate=totalBud>0?totalExec/totalBud*100:0;
+
+  document.getElementById('agg-kpi').innerHTML=`
+    <div class="kpi-card red"><div class="kpi-label">총 집행액</div>
+      <div class="kpi-value">${fmt(totalExec)}천원</div>
+      <div class="kpi-sub">${fmt(rawRows.length)}건 합산</div></div>
+    <div class="kpi-card green"><div class="kpi-label">집행률</div>
+      <div class="kpi-value">${fmtF(execRate)}%</div>
+      <div class="kpi-sub">협약예산 ${fmt(Math.round(totalBud))}천원 대비</div>
+      <div class="kpi-bar"><div class="kpi-bar-fill" style="width:${Math.min(execRate,100)}%;background:${execRate>=80?'var(--g2)':execRate>=60?'var(--y2)':'var(--r2)'}"></div></div></div>
+    <div class="kpi-card amber"><div class="kpi-label">분석 기간</div>
+      <div class="kpi-value">${MONTHS.length}개월</div>
+      <div class="kpi-sub">${MONTHS[0]} ~ ${MONTHS[MONTHS.length-1]}</div></div>
+    <div class="kpi-card blue"><div class="kpi-label">비목 종류</div>
+      <div class="kpi-value">${ITEMS.filter(item=>MONTHS.some(m=>getAgg(item.id,m)>0)).length}개</div>
+      <div class="kpi-sub">집행 있는 비목</div></div>
+  `;
+
+  // 집계 테이블
+  const grps=[...new Set(ITEMS.map(i=>i.grp))];
+  let html=`<thead><tr><th style="text-align:left;">비목</th>`;
+  MONTHS.forEach(m=>html+=`<th class="mth" style="min-width:58px;font-size:8px;">${m.slice(5)}월</th>`);
+  html+=`<th>합계</th><th>평균/월</th></tr></thead><tbody>`;
+  grps.forEach(g=>{
+    html+=`<tr class="group-row"><td colspan="${MONTHS.length+3}">▸ ${g}</td></tr>`;
+    ITEMS.filter(i=>i.grp===g).forEach(item=>{
+      const rowTotal=MONTHS.reduce((s,m)=>s+getAgg(item.id,m),0);
+      html+=`<tr><td style="color:${item.clr};font-weight:600;font-size:11px;">${item.name}</td>`;
+      MONTHS.forEach(m=>{
+        const v=getAgg(item.id,m);
+        html+=`<td class="mono cell-val${v===0?' cell-zero':''}">${v>0?fmt(Math.round(v)):'·'}</td>`;
+      });
+      html+=`<td class="mono" style="color:var(--knu-red);font-weight:700;">${fmt(Math.round(rowTotal))}</td>`;
+      html+=`<td class="mono" style="color:var(--tx2);font-size:10px;">${fmt(Math.round(rowTotal/MONTHS.length))}</td></tr>`;
+    });
+  });
+  // 합계 행
+  const colTotals=MONTHS.map(m=>ITEMS.reduce((s,item)=>s+getAgg(item.id,m),0));
+  html+=`<tr class="total-row"><td>합계</td>`;
+  colTotals.forEach(v=>html+=`<td class="mono">${v>0?fmt(Math.round(v)):''}</td>`);
+  html+=`<td class="mono" style="color:var(--knu-red)">${fmt(Math.round(totalExec))}</td><td class="mono">${fmt(Math.round(totalExec/MONTHS.length))}</td></tr></tbody>`;
+  document.getElementById('aggTable').innerHTML=html;
+
+  // 원본 미리보기
+  const dateCol=vs('col-date'),itemCol=vs('col-item'),amtCol=vs('col-amt'),descCol=vs('col-desc');
+  let ph=`<thead><tr><th>날짜</th><th>비목(원본)</th><th>매핑</th><th>금액</th>${descCol?'<th>적요</th>':''}</tr></thead><tbody>`;
+  const preview=rawRows.slice(-50).reverse();
+  preview.forEach(row=>{
+    const src=String(row[itemCol]||'').trim();
+    const mapped=colMap[src];
+    const itemName=ITEMS.find(i=>i.id===mapped)?.name||'';
+    const clr=ITEMS.find(i=>i.id===mapped)?.clr||'var(--tx3)';
+    ph+=`<tr>
+      <td class="mono">${row[dateCol]||''}</td>
+      <td>${src}</td>
+      <td style="color:${clr};font-size:10px;font-weight:600;">${itemName||'<span style="color:var(--er-tx)">미분류</span>'}</td>
+      <td class="mono amt">${fmt(parseFloat(String(row[amtCol]||'').replace(/[,\s]/g,''))||0)}</td>
+      ${descCol?`<td style="font-size:10px;color:var(--tx2);">${String(row[descCol]||'').slice(0,30)}</td>`:''}
+    </tr>`;
+  });
+  document.getElementById('previewTable').innerHTML=ph+'</tbody>';
+}
+
+// ═══════════════════════════════════════════════════
+//  전체 분석
+// ═══════════════════════════════════════════════════
+function runAnalysis(tab){
+  if(tab===3) buildRangeTab();
+  if(tab===4) buildPatternTab();
+  if(tab===5) buildRewardTab();
+  if(tab===6) buildAlertTab();
+}
+
+// ═══════════════════════════════════════════════════
+//  TAB3: 적정범위
+// ═══════════════════════════════════════════════════
+function buildRangeTab(){
+  MONTHS=getMonths();
+  const annual=vn('annBud');
+  const target=vn('tgtRate')/100;
+
+  const totalExec=ITEMS.reduce((s,item)=>s+MONTHS.reduce((ss,m)=>ss+getAgg(item.id,m),0),0);
+  const totalBud=annual*(MONTHS.length/12);
+  const execRate=totalBud>0?totalExec/totalBud*100:0;
+  const monthTotals=MONTHS.map(m=>ITEMS.reduce((s,item)=>s+getAgg(item.id,m),0));
+  const ms=stats(monthTotals);
+
+  document.getElementById('range-kpi').innerHTML=`
+    <div class="kpi-card red"><div class="kpi-label">3개년 총 집행</div><div class="kpi-value">${fmt(totalExec)}천원</div><div class="kpi-sub">${MONTHS.length}개월 합산</div></div>
+    <div class="kpi-card green"><div class="kpi-label">전체 집행률</div><div class="kpi-value">${fmtF(execRate)}%</div>
+      <div class="kpi-sub">목표 ${(target*100).toFixed(0)}% ${execRate>=target*100?'✅ 달성':'⚠ 미달'}</div>
+      <div class="kpi-bar"><div class="kpi-bar-fill" style="width:${Math.min(execRate,100)}%;background:${execRate>=80?'var(--g2)':execRate>=60?'var(--y2)':'var(--r2)'}"></div></div></div>
+    <div class="kpi-card amber"><div class="kpi-label">월 평균 집행</div><div class="kpi-value">${fmt(Math.round(ms.avg))}천원</div><div class="kpi-sub">σ=${fmt(Math.round(ms.std))}천원</div></div>
+    <div class="kpi-card blue"><div class="kpi-label">적정 월 집행 범위</div><div class="kpi-value" style="font-size:13px;">${fmt(Math.round(Math.max(0,ms.avg-ms.std)))}~${fmt(Math.round(ms.avg+ms.std))}</div><div class="kpi-sub">천원 (평균±σ)</div></div>
+    <div class="kpi-card red"><div class="kpi-label">최고 집행월</div><div class="kpi-value">${fmt(ms.max)}천원</div><div class="kpi-sub">${MONTHS[monthTotals.indexOf(ms.max)]}</div></div>
+  `;
+
+  // 비목별 범위 시각화
+  const directAvgM=MONTHS.reduce((s,m)=>s+ITEMS.filter(i=>i.grp!=='간접비'&&i.grp!=='성과활용')
+    .reduce((ss,item)=>ss+getAgg(item.id,m),0),0)/MONTHS.length;
+  const maxVal=Math.max(...ITEMS.map(item=>stats(MONTHS.map(m=>getAgg(item.id,m))).max));
+
+  const grps=[...new Set(ITEMS.map(i=>i.grp))];
+  let html='';
+  grps.forEach(g=>{
+    html+=`<div style="font-size:9px;font-weight:700;color:var(--g2);letter-spacing:1.5px;text-transform:uppercase;margin:14px 0 8px;">▸ ${g}</div>`;
+    ITEMS.filter(i=>i.grp===g).forEach(item=>{
+      const arr=MONTHS.map(m=>getAgg(item.id,m));
+      const s=stats(arr);
+      if(s.sum===0){html+=`<div style="padding:10px 14px;background:#f7f8fa;border:1px solid var(--bdr);border-radius:7px;margin-bottom:8px;font-size:10px;color:var(--tx3);">${item.name} — 집행 없음</div>`;return;}
+      const low=Math.max(0,Math.round(s.avg-s.std));
+      const high=Math.round(s.avg+s.std);
+
+      // 규정 한도
+      let limAmt=null,limLabel='';
+      if(item.lim?.t==='pct'){
+        const base=item.lim.base==='total'?(annual/12):directAvgM;
+        limAmt=Math.round(base*item.lim.p);
+        limLabel=`한도 ${fmt(limAmt)}천원`;
+      } else if(item.lim?.t==='reward'){
+        const pbAvg=stats(MONTHS.map(m=>getAgg('prof',m)+getAgg('student',m)+getAgg('unpaid',m))).avg;
+        limAmt=Math.round(pbAvg*0.20);
+        limLabel=`상한 ${fmt(limAmt)}천원`;
+      }
+      const effHigh=limAmt?Math.min(high,limAmt):high;
+      const isOver=limAmt&&s.avg>limAmt;
+      const isUnstable=s.std/s.avg>0.6;
+      const chip=isOver?`<span class="chip chip-err">⚠ 한도초과</span>`:
+                 isUnstable?`<span class="chip chip-warn">변동 큼</span>`:
+                 `<span class="chip chip-ok">적정</span>`;
+
+      const pct=(v)=>maxVal>0?Math.min(v/maxVal*100,100):0;
+      html+=`<div class="range-item">
+        <div class="ri-header">
+          <div class="ri-name" style="color:${item.clr}">${item.name} ${chip}</div>
+          <div class="ri-stats">
+            <div class="ri-stat"><span class="sv" style="color:var(--knu-red)">${fmt(low)}</span><span class="sl">하한</span></div>
+            <div class="ri-stat"><span class="sv" style="color:var(--knu-red)">${fmt(Math.round(s.avg))}</span><span class="sl">평균</span></div>
+            <div class="ri-stat"><span class="sv" style="color:${isOver&&limAmt?'var(--r3)':'#bf941a'}">${fmt(effHigh)}</span><span class="sl">상한${limAmt?'(규정)':''}</span></div>
+            <div class="ri-stat"><span class="sv" style="color:var(--y3)">${fmt(Math.round(s.std))}</span><span class="sl">σ</span></div>
+          </div>
+        </div>
+        <div class="range-track">
+          <div class="range-fill" style="left:${pct(low)}%;right:${100-pct(effHigh)}%"></div>
+          <div class="range-avg" style="left:${pct(Math.round(s.avg))}%"></div>
+          ${limAmt?`<div class="range-lim" style="left:${pct(limAmt)}%"></div>`:''}
+          <div class="range-lbl" style="left:2px;top:3px;color:var(--tx3);">${fmt(0)}</div>
+          <div class="range-lbl" style="right:2px;top:3px;color:var(--tx3);">${fmt(Math.round(maxVal))}</div>
+        </div>
+        ${limAmt?`<div style="font-size:9px;color:var(--er-tx);margin-top:4px;">🔴 규정 ${limLabel} · 실적 평균 ${fmt(Math.round(s.avg))}천원 ${isOver?'<strong>→ 한도 초과!</strong>':' ✓ 적정'}</div>`:''}
+      </div>`;
+    });
+  });
+  document.getElementById('rangeVis').innerHTML=html;
+
+  // 범위 차트
+  const ctx=document.getElementById('rangeChart').getContext('2d');
+  if(charts.range) charts.range.destroy();
+  const low=Math.max(0,ms.avg-ms.std);
+  const high2=ms.avg+ms.std;
+  charts.range=new Chart(ctx,{
+    type:'line',
+    data:{labels:MONTHS.map(m=>m.slice(5)+'월'),datasets:[
+      {label:'실집행(천원)',data:monthTotals,borderColor:'#991b1b',backgroundColor:'rgba(153,27,27,.12)',borderWidth:2,pointRadius:3,fill:true,tension:.3},
+      {label:'적정 상한',data:MONTHS.map(()=>high2),borderColor:'rgba(34,197,94,.7)',borderWidth:1.5,borderDash:[6,3],pointRadius:0,fill:false},
+      {label:'평균',data:MONTHS.map(()=>ms.avg),borderColor:'rgba(245,158,11,.8)',borderWidth:1.5,borderDash:[3,3],pointRadius:0,fill:false},
+      {label:'적정 하한',data:MONTHS.map(()=>low),borderColor:'rgba(239,68,68,.6)',borderWidth:1.5,borderDash:[6,3],pointRadius:0,fill:false},
+    ]},
+    options:{responsive:true,plugins:{legend:{labels:{color:'#6b7280',font:{size:10}}}},
+      scales:{x:{ticks:{color:'#9ca3af',font:{size:8},maxRotation:45},grid:{color:'#e5e7eb'}},
+              y:{ticks:{color:'#9ca3af',font:{size:9}},grid:{color:'#e5e7eb'}}}}
+  });
+
+  // 경고
+  buildRangeAlerts();
+}
+
+function buildRangeAlerts(){
+  const annual=vn('annBud');
+  const directAvgM=MONTHS.reduce((s,m)=>s+ITEMS.filter(i=>i.grp!=='간접비'&&i.grp!=='성과활용')
+    .reduce((ss,item)=>ss+getAgg(item.id,m),0),0)/MONTHS.length;
+  const alerts=[];
+  ITEMS.forEach(item=>{
+    if(!item.lim) return;
+    const s=stats(MONTHS.map(m=>getAgg(item.id,m)));
+    if(item.lim.t==='pct'){
+      const base=item.lim.base==='total'?(annual/12):directAvgM;
+      const lim=base*item.lim.p;
+      if(s.avg>lim) alerts.push({t:'er',msg:`<strong>${item.name}</strong> 월 평균(${fmt(Math.round(s.avg))}천원)이 한도(${fmt(Math.round(lim))}천원)를 초과합니다.`});
+    }
+  });
+  const monthTotals=MONTHS.map(m=>ITEMS.reduce((s,item)=>s+getAgg(item.id,m),0));
+  const ms=stats(monthTotals);
+  const totalBud=vn('annBud')*(MONTHS.length/12);
+  const er=ITEMS.reduce((s,item)=>s+MONTHS.reduce((ss,m)=>ss+getAgg(item.id,m),0),0)/totalBud*100;
+  if(er<vn('tgtRate')) alerts.push({t:'wn',msg:`전체 집행률 ${er.toFixed(1)}%로 목표(${vn('tgtRate')}%) 미달입니다.`});
+  else alerts.push({t:'ok',msg:`전체 집행률 ${er.toFixed(1)}% — 목표 달성 ✅`});
+  document.getElementById('range-alerts').innerHTML=alerts.map(a=>
+    `<div class="alrt ${a.t}"><span>${a.t==='ok'?'✅':a.t==='wn'?'⚠️':'🚨'}</span><span>${a.msg}</span></div>`).join('');
+}
+
+// ═══════════════════════════════════════════════════
+//  TAB4: 패턴 분석 (전면 개선)
+// ═══════════════════════════════════════════════════
+function buildPatternTab(){
+  MONTHS=getMonths();
+  if(!MONTHS.length || !Object.keys(aggData).length) return;
+
+  const annual=vn('annBud');
+
+  // 3개 연도 그룹
+  const third=Math.ceil(MONTHS.length/3);
+  const yg=[
+    MONTHS.slice(0, third),
+    MONTHS.slice(third, third*2),
+    MONTHS.slice(third*2),
+  ].filter(g=>g.length>0);
+  const yLabels=['1차년도','2차년도','3차년도'].slice(0,yg.length);
+
+  // ── 차트1: 연도별 비목별 누적 막대 ──────────────────
+  const ctx1=document.getElementById('trendChart').getContext('2d');
+  if(charts.trend) charts.trend.destroy();
+  charts.trend=new Chart(ctx1,{type:'bar',
+    data:{
+      labels:yLabels,
+      datasets:ITEMS.filter(i=>i.id!=='unpaid').map(item=>({
+        label:item.name,
+        borderWidth:1,borderColor:item.clr,
+        backgroundColor:item.clr+'bb',
+        data:yg.map(ym=>Math.round(ym.reduce((s,m)=>s+getAgg(item.id,m),0))),
+      }))
+    },
+    options:{
+      responsive:true,
+      plugins:{
+        legend:{display:true,position:'bottom',labels:{color:'#4b5563',font:{size:9},boxWidth:10,padding:6}},
+        tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.parsed.y.toLocaleString()}천원`}}
+      },
+      scales:{
+        x:{stacked:true,ticks:{color:'#6b7280',font:{size:11}},grid:{display:false}},
+        y:{stacked:true,ticks:{color:'#9ca3af',font:{size:9},callback:v=>`${(v/1000).toFixed(0)}M`},grid:{color:'#e5e7eb'}}
+      }
+    }
+  });
+
+  // ── 차트2: 비목별 집행 비중 도넛 ──────────────────
+  const ctx2=document.getElementById('pieChart').getContext('2d');
+  if(charts.pie) charts.pie.destroy();
+  const pieVals=ITEMS.map(item=>Math.round(MONTHS.reduce((s,m)=>s+getAgg(item.id,m),0)));
+  const pieTotal=pieVals.reduce((s,x)=>s+x,0);
+  charts.pie=new Chart(ctx2,{type:'doughnut',
+    data:{
+      labels:ITEMS.map(i=>i.name),
+      datasets:[{
+        data:pieVals,
+        backgroundColor:ITEMS.map(i=>i.clr+'cc'),
+        borderColor:ITEMS.map(i=>i.clr),
+        borderWidth:1
+      }]
+    },
+    options:{
+      responsive:true,
+      plugins:{
+        legend:{position:'right',labels:{color:'#4b5563',font:{size:9},boxWidth:10}},
+        tooltip:{callbacks:{label:ctx=>{
+          const pct=pieTotal>0?(ctx.parsed/pieTotal*100).toFixed(1):0;
+          return `${ctx.label}: ${ctx.parsed.toLocaleString()}천원 (${pct}%)`;
+        }}}
+      }
+    }
+  });
+
+  // ── 차트3: 월별 시계열 (주요 5개 비목) ──────────────
+  const ctx3=document.getElementById('tsChart').getContext('2d');
+  if(charts.ts) charts.ts.destroy();
+  const mainItems=['prof','student','reward','material','indirect'];
+  charts.ts=new Chart(ctx3,{type:'line',
+    data:{
+      labels:MONTHS.map(m=>m.slice(2)), // 'YY-MM' 축약
+      datasets:mainItems.map(id=>{
+        const item=ITEMS.find(i=>i.id===id);
+        return {
+          label:item.name,
+          data:MONTHS.map(m=>Math.round(getAgg(id,m))),
+          borderColor:item.clr,
+          backgroundColor:item.clr+'18',
+          borderWidth:2,pointRadius:2,pointHoverRadius:4,
+          fill:false,tension:.35
+        };
+      })
+    },
+    options:{
+      responsive:true,
+      interaction:{mode:'index',intersect:false},
+      plugins:{
+        legend:{labels:{color:'#4b5563',font:{size:9},boxWidth:10}},
+        tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.parsed.y.toLocaleString()}천원`}}
+      },
+      scales:{
+        x:{ticks:{color:'#9ca3af',font:{size:8},maxRotation:45,maxTicksLimit:18},grid:{color:'#e5e7eb'}},
+        y:{ticks:{color:'#9ca3af',font:{size:9},callback:v=>`${v.toLocaleString()}`},grid:{color:'#e5e7eb'}}
+      }
+    }
+  });
+
+  // ── 연도별 집행률 계산 ──────────────────────────────
+  const yRates=yg.map(ym=>{
+    const exec=ym.reduce((s,m)=>s+ITEMS.reduce((ss,item)=>ss+getAgg(item.id,m),0),0);
+    const bud=annual*(ym.length/12);
+    return bud>0?exec/bud*100:0;
+  });
+
+  // ── 월별 집행 편중도 분석 ────────────────────────────
+  const moNums=Array.from({length:12},(_,i)=>i+1);
+  const moAvgArr=moNums.map(mo=>{
+    const vals=MONTHS
+      .filter(m=>parseInt(m.slice(5))===mo)
+      .map(m=>ITEMS.reduce((s,item)=>s+getAgg(item.id,m),0))
+      .filter(x=>x>0);
+    return vals.length>0 ? vals.reduce((s,x)=>s+x,0)/vals.length : 0;
+  });
+  const maxMoVal=Math.max(...moAvgArr);
+  const maxMo=maxMoVal>0 ? moAvgArr.indexOf(maxMoVal)+1 : null;
+
+  // ── 비목별 상위 집행 분석 ────────────────────────────
+  const itemTotals=ITEMS.map(item=>({
+    name:item.name,
+    total:MONTHS.reduce((s,m)=>s+getAgg(item.id,m),0),
+    clr:item.clr
+  })).filter(x=>x.total>0).sort((a,b)=>b.total-a.total);
+  const grandTotal=itemTotals.reduce((s,x)=>s+x.total,0);
+
+  // ── 월별 편중도 히트맵 바 ─────────────────────────────
+  const moNames=['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
+  const moHtml=moAvgArr.map((avg,i)=>{
+    const pct=maxMoVal>0?avg/maxMoVal*100:0;
+    const isMax=i+1===maxMo;
+    return `<div style="flex:1;text-align:center;">
+      <div style="height:40px;background:#f1f3f5;border-radius:3px;position:relative;overflow:hidden;margin-bottom:3px;">
+        <div style="position:absolute;bottom:0;left:0;right:0;height:${pct}%;
+          background:${isMax?'var(--knu-red)':'var(--knu-red)'}; opacity:${isMax?1:0.25+pct/140};
+          transition:height .5s;"></div>
+      </div>
+      <div style="font-size:8px;color:${isMax?'var(--knu-red)':'var(--tx3)'};font-weight:${isMax?700:400};">${moNames[i]}</div>
+    </div>`;
+  }).join('');
+
+  // ── 트렌드 분석 텍스트 ──────────────────────────────
+  const trend = yRates.length>=2
+    ? (yRates[yRates.length-1] > yRates[0]
+        ? `<span style="color:var(--ok-tx);font-weight:700;">📈 개선 추세</span> (${yRates[0].toFixed(0)}% → ${yRates[yRates.length-1].toFixed(0)}%)`
+        : `<span style="color:var(--er-tx);font-weight:700;">📉 감소 추세</span> (${yRates[0].toFixed(0)}% → ${yRates[yRates.length-1].toFixed(0)}%)`)
+    : '-';
+
+  // ── 최다 집행 비목 ─────────────────────────────────
+  const topItem=itemTotals[0];
+  const topPct=grandTotal>0?(topItem.total/grandTotal*100).toFixed(1):0;
+
+  document.getElementById('patSummary').innerHTML=`
+    <!-- 연도별 집행률 카드 -->
+    <div style="display:grid;grid-template-columns:repeat(${yg.length},1fr);gap:10px;margin-bottom:16px;">
+    ${yRates.map((r,i)=>{
+      const color=r>=80?'var(--ok-tx)':r>=60?'var(--wn-tx)':'var(--er-tx)';
+      const bg=r>=80?'var(--ok-bg)':r>=60?'var(--wn-bg)':'var(--er-bg)';
+      const bd=r>=80?'var(--ok-bd)':r>=60?'var(--wn-bd)':'var(--er-bd)';
+      const start=yg[i][0], end=yg[i][yg[i].length-1];
+      return `<div style="background:${bg};border:1px solid ${bd};border-radius:4px;padding:12px 14px;">
+        <div style="font-size:9px;color:${color};font-weight:600;margin-bottom:4px;">${i+1}차년도 집행률</div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:22px;font-weight:800;color:${color};">${r.toFixed(1)}%</div>
+        <div style="font-size:9px;color:var(--tx3);margin-top:2px;">${start} ~ ${end}</div>
+        <div style="height:4px;background:rgba(0,0,0,.08);border-radius:2px;margin-top:8px;">
+          <div style="height:100%;border-radius:2px;width:${Math.min(r,100)}%;background:${color};"></div>
+        </div>
+      </div>`;
+    }).join('')}
+    </div>
+
+    <!-- 핵심 지표 요약 -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">
+      <div class="alert alert-info" style="flex-direction:column;gap:6px;border-radius:4px;">
+        <div style="font-weight:700;font-size:11px;">📊 집행 트렌드</div>
+        <div style="font-size:11px;">${trend}</div>
+        <div style="font-size:10px;color:var(--tx2);">3개년 전체 집행률 기준</div>
+      </div>
+      <div class="alert alert-info" style="flex-direction:column;gap:6px;border-radius:4px;">
+        <div style="font-weight:700;font-size:11px;">🏆 최다 집행 비목</div>
+        <div style="font-size:11px;font-weight:700;color:${topItem?.clr||'var(--tx)'};">${topItem?.name||'-'}</div>
+        <div style="font-size:10px;color:var(--tx2);">전체의 <strong>${topPct}%</strong> (${fmt(Math.round(topItem?.total||0))}천원)</div>
+      </div>
+    </div>
+
+    <!-- 월별 집중 집행 히트맵 -->
+    <div style="background:#f7f8fa;border:1px solid var(--bdr);border-radius:4px;padding:14px;">
+      <div style="font-size:10px;font-weight:700;color:var(--tx2);margin-bottom:10px;">
+        📅 월별 평균 집행 분포
+        ${maxMo ? `— <strong style="color:var(--knu-red);">${maxMo}월</strong>에 집중 집행 경향` : ''}
+      </div>
+      <div style="display:flex;gap:3px;align-items:flex-end;height:60px;">${moHtml}</div>
+    </div>
+
+    <!-- 비목별 집행 비중 -->
+    <div style="margin-top:12px;background:#f7f8fa;border:1px solid var(--bdr);border-radius:4px;padding:14px;">
+      <div style="font-size:10px;font-weight:700;color:var(--tx2);margin-bottom:10px;">💰 비목별 3개년 집행 비중</div>
+      ${itemTotals.slice(0,8).map(it=>{
+        const pct=grandTotal>0?it.total/grandTotal*100:0;
+        return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+          <div style="width:90px;font-size:10px;color:var(--tx);font-weight:500;flex-shrink:0;">${it.name}</div>
+          <div style="flex:1;background:#e5e7eb;border-radius:3px;height:14px;overflow:hidden;">
+            <div style="height:100%;width:${pct}%;background:${it.clr};border-radius:3px;transition:width .5s;"></div>
+          </div>
+          <div style="width:80px;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--tx2);text-align:right;">${pct.toFixed(1)}%</div>
+          <div style="width:90px;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--tx3);text-align:right;">${fmt(Math.round(it.total))}천원</div>
+        </div>`;
+      }).join('')}
+    </div>`;
+}
+
+// ═══════════════════════════════════════════════════
+//  TAB5: 연구수당
+// ═══════════════════════════════════════════════════
+function buildRewardTab(){
+  MONTHS=getMonths();
+  const rewardArr=MONTHS.map(m=>getAgg('reward',m));
+  const profArr=MONTHS.map(m=>getAgg('prof',m)+getAgg('student',m)+getAgg('unpaid',m));
+  const rewardMaxArr=profArr.map(x=>x*0.20);
+  const directArr=MONTHS.map(m=>ITEMS.filter(i=>i.grp!=='간접비'&&i.grp!=='성과활용')
+    .reduce((s,item)=>s+getAgg(item.id,m),0));
+  const directBudM=vn('annBud')/12;
+  const dirRates=directArr.map(x=>directBudM>0?x/directBudM*100:0);
+  const payRates=dirRates.map(r=>Math.min(100,r+20));
+
+  const totalReward=rewardArr.reduce((s,x)=>s+x,0);
+  const totalMax=rewardMaxArr.reduce((s,x)=>s+x,0);
+  const overM=MONTHS.filter((_,mi)=>rewardArr[mi]>rewardMaxArr[mi]&&rewardArr[mi]>0);
+  const avgDir=dirRates.reduce((s,x)=>s+x,0)/dirRates.length;
+
+  document.getElementById('rwKPI').innerHTML=`
+    <div class="kpi-card blue"><div class="kpi-label">총 연구수당 집행</div>
+      <div class="kpi-value" style="color:${totalReward<=totalMax?'var(--g3)':'var(--r3)'}">${fmt(Math.round(totalReward))}천원</div>
+      <div class="kpi-sub">상한 ${fmt(Math.round(totalMax))}천원 대비 ${fmtF(totalReward/totalMax*100)}%</div></div>
+    <div class="kpi-card red"><div class="kpi-label">평균 직접비 집행률</div>
+      <div class="kpi-value" style="color:${avgDir>=80?'var(--g3)':avgDir>=60?'var(--y3)':'var(--r3)'}">${fmtF(avgDir)}%</div>
+      <div class="kpi-sub">80% 이상 → 수당 100% 지급 가능</div></div>
+    <div class="kpi-card red"><div class="kpi-label">상한 초과 월수</div>
+      <div class="kpi-value" style="color:${overM.length===0?'var(--g3)':'var(--r3)'}">${overM.length}개월</div>
+      <div class="kpi-sub">${overM.length>0?'⚠ 반납 위험':'✅ 규정 준수'}</div></div>
+  `;
+
+  let html=`<thead><tr>
+    <th style="text-align:left;">연월</th>
+    <th>인건비합계</th><th>수당 상한(20%)</th>
+    <th>직접비 집행률</th><th>지급가능비율</th>
+    <th>실집행 수당</th><th>판정</th>
+  </tr></thead><tbody>`;
+  MONTHS.forEach((m,mi)=>{
+    const pb=profArr[mi],rm=rewardMaxArr[mi],ra=rewardArr[mi];
+    const dr=dirRates[mi],pr=payRates[mi];
+    const isOver=ra>rm&&ra>0;
+    const isDangerous=dr<60&&ra>0;
+    html+=`<tr>
+      <td class="mono">${m}</td>
+      <td class="mono">${fmt(Math.round(pb))}</td>
+      <td class="mono" style="color:var(--y3)">${fmt(Math.round(rm))}</td>
+      <td class="mono" style="color:${dr>=80?'var(--g3)':dr>=60?'var(--y3)':'var(--r3)'};">${dr.toFixed(1)}%</td>
+      <td class="mono" style="color:#e8b830;">${pr.toFixed(1)}%</td>
+      <td class="mono" style="color:${isOver?'var(--r3)':ra>0?'var(--g3)':'var(--tx3)'}">${ra>0?fmt(Math.round(ra)):'-'}</td>
+      <td>${isOver?`<span class="chip chip-err">⚠ 초과</span>`:isDangerous?`<span class="chip chip-warn">주의</span>`:ra>0?`<span class="chip chip-ok">정상</span>`:'<span style="color:var(--tx3);font-size:9px;">-</span>'}</td>
+    </tr>`;
+  });
+  document.getElementById('rwTable').innerHTML=html;
+
+  const ctx=document.getElementById('rwChart').getContext('2d');
+  if(charts.rw) charts.rw.destroy();
+  charts.rw=new Chart(ctx,{type:'line',
+    data:{labels:MONTHS,datasets:[
+      {label:'직접비 집행률(%)',data:dirRates,borderColor:'#991b1b',backgroundColor:'rgba(153,27,27,.10)',borderWidth:2,yAxisID:'y',fill:true,tension:.3},
+      {label:'연구수당 지급가능(%)',data:payRates,borderColor:'#dc2626',borderWidth:1.5,borderDash:[5,3],pointRadius:0,yAxisID:'y',fill:false,tension:.3},
+      {label:'실집행 수당(천원)',data:rewardArr,borderColor:'#f59e0b',borderWidth:1.5,yAxisID:'y2',fill:false,tension:.3,type:'bar',backgroundColor:'rgba(245,158,11,.2)'},
+    ]},
+    options:{responsive:true,plugins:{legend:{labels:{color:'#6b7280',font:{size:10}}}},
+      scales:{
+        y:{position:'left',min:0,max:120,ticks:{color:'#9ca3af',font:{size:9},callback:v=>v+'%'},grid:{color:'#e5e7eb'}},
+        y2:{position:'right',ticks:{color:'#f59e0b',font:{size:9}},grid:{display:false}},
+        x:{ticks:{color:'#9ca3af',font:{size:8},maxRotation:45},grid:{color:'#e5e7eb'}}
+      }}
+  });
+}
+
+// ═══════════════════════════════════════════════════
+//  TAB6: 이상징후
+// ═══════════════════════════════════════════════════
+function buildAlertTab(){
+  MONTHS=getMonths();
+  const annual=vn('annBud');
+  const anomalies=[],compliance=[];
+
+  // 급증 탐지 (평균+2.5σ 초과)
+  ITEMS.forEach(item=>{
+    const arr=MONTHS.map(m=>getAgg(item.id,m));
+    const s=stats(arr.filter(x=>x>0));
+    if(s.n<3) return;
+    MONTHS.forEach((m,mi)=>{
+      if(arr[mi]>s.avg+2.5*s.std&&arr[mi]>0)
+        anomalies.push({t:'wn',msg:`<strong>${item.name}</strong> ${m}: ${fmt(Math.round(arr[mi]))}천원 — 평균(${fmt(Math.round(s.avg))}천원)의 ${(arr[mi]/s.avg).toFixed(1)}배`});
+    });
+  });
+
+  // 연속 미집행
+  ITEMS.forEach(item=>{
+    let run=0,start='';
+    MONTHS.forEach((m,mi)=>{
+      if(getAgg(item.id,m)===0){if(run===0)start=m;run++;}
+      else{if(run>=3)anomalies.push({t:'er',msg:`<strong>${item.name}</strong> ${start}~ ${run}개월 연속 미집행`});run=0;}
+    });
+    if(run>=3) anomalies.push({t:'er',msg:`<strong>${item.name}</strong> ${start}~ ${run}개월 연속 미집행`});
+  });
+
+  // 연말 집중
+  const yg=[MONTHS.slice(0,Math.ceil(MONTHS.length/3)),MONTHS.slice(Math.ceil(MONTHS.length/3),Math.ceil(MONTHS.length/3)*2),MONTHS.slice(Math.ceil(MONTHS.length/3)*2)];
+  yg.forEach((ym,yi)=>{
+    const last2=ym.slice(-2);
+    const lastExec=last2.reduce((s,m)=>s+ITEMS.reduce((ss,item)=>ss+getAgg(item.id,m),0),0);
+    const total=ym.reduce((s,m)=>s+ITEMS.reduce((ss,item)=>ss+getAgg(item.id,m),0),0);
+    const r=total>0?lastExec/total:0;
+    if(r>0.35) anomalies.push({t:'wn',msg:`<strong>${yi+1}차년도</strong> 마지막 2개월에 연간 집행의 ${(r*100).toFixed(0)}% 집중`});
+  });
+
+  // 규정 준수 체크
+  const directAvgM=MONTHS.reduce((s,m)=>s+ITEMS.filter(i=>i.grp!=='간접비'&&i.grp!=='성과활용').reduce((ss,item)=>ss+getAgg(item.id,m),0),0)/MONTHS.length;
+  ITEMS.forEach(item=>{
+    if(!item.lim) return;
+    const s=stats(MONTHS.map(m=>getAgg(item.id,m)));
+    let passed=true,detail='';
+    if(item.lim.t==='pct'){
+      const base=item.lim.base==='total'?(annual/12):directAvgM;
+      const lim=base*item.lim.p;
+      passed=s.avg<=lim;
+      detail=`월 평균 ${fmt(Math.round(s.avg))}천원 / 한도 ${fmt(Math.round(lim))}천원`;
+    } else if(item.lim.t==='reward'){
+      const pb=stats(MONTHS.map(m=>getAgg('prof',m)+getAgg('student',m)+getAgg('unpaid',m))).avg;
+      const lim=pb*0.20;
+      passed=s.avg<=lim;
+      detail=`월 평균 ${fmt(Math.round(s.avg))}천원 / 상한 ${fmt(Math.round(lim))}천원`;
+    }
+    compliance.push({item,passed,detail});
+  });
+
+  document.getElementById('anomList').innerHTML=anomalies.length===0
+    ?'<div class="alert alert-success"><span>✅</span><span>이상 징후가 감지되지 않았습니다.</span></div>'
+    :anomalies.map(a=>`<div class="alrt ${a.t}"><span>${a.t==='wn'?'⚠️':'🚨'}</span><span>${a.msg}</span></div>`).join('');
+
+  document.getElementById('compList').innerHTML=`
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px;">
+    ${compliance.map(c=>`<div style="display:flex;gap:9px;padding:11px 13px;
+      background:${c.passed?'rgba(34,197,94,.07)':'rgba(239,68,68,.07)'};
+      border:1px solid ${c.passed?'rgba(34,197,94,.25)':'rgba(239,68,68,.25)'};border-radius:7px;">
+      <span>${c.passed?'✅':'❌'}</span>
+      <div><div style="font-size:11px;font-weight:600;margin-bottom:2px;">${c.item.name}</div>
+        <div style="font-size:10px;color:var(--tx2);">${c.detail}</div></div>
+    </div>`).join('')}
+    </div>`;
+
+  const passCount=compliance.filter(c=>c.passed).length;
+  document.getElementById('recList').innerHTML=`
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;">
+      <div class="alert alert-info" style="flex-direction:column;border-radius:8px;"><strong>📊 규정 준수</strong><span>${compliance.length}개 비목 중 ${passCount}개 준수, ${compliance.length-passCount}개 주의</span></div>
+      <div class="alert alert-info" style="flex-direction:column;border-radius:8px;"><strong>🚨 이상 징후</strong><span>${anomalies.length}건 감지 ${anomalies.length===0?'— 정상':'— 조치 필요'}</span></div>
+      <div class="alert alert-info" style="flex-direction:column;border-radius:8px;"><strong>🏆 연구수당</strong><span>직접비 집행률 80% 이상 유지 시점에 지급하고, 1인 70% 초과 금지 매월 확인</span></div>
+      <div class="alert alert-info" style="flex-direction:column;border-radius:8px;"><strong>📅 집행 전략</strong><span>월 평균 균등 집행 권장. 연말 집중 집행 30% 초과 시 반납 위험 증가</span></div>
+    </div>`;
+}
+
+// ═══════════════════════════════════════════════════
+//  샘플 데이터
+// ═══════════════════════════════════════════════════
+function loadSample(){
+  MONTHS=getMonths();
+  if(!MONTHS.length) return;
+  const annual=vn('annBud');
+  // 건별 지출내역 시뮬레이션 생성
+  const itemSrc={
+    prof:'인건비(전임교원)',student:'학생인건비',reward:'연구수당',
+    material:'연구재료비',equip:'연구시설·장비비',travel:'여비',
+    activity:'연구활동비',indirect:'간접비',tech:'연구성과활용지원비',other:'기타직접비'
+  };
+  const patterns={
+    prof:{base:.16,var:.01},student:{base:.22,var:.03},reward:{base:.055,var:.01},
+    material:{base:.08,var:.05},equip:{base:.05,var:.04},travel:{base:.035,var:.025},
+    activity:{base:.025,var:.015},indirect:{base:.16,var:.01},tech:{base:.018,var:.01},other:{base:.025,var:.015}
+  };
+  const rows=[['지출일자','비목','금액(천원)','적요']];
+  MONTHS.forEach(m=>{
+    Object.entries(patterns).forEach(([id,p])=>{
+      const total=Math.round(annual*p.base/12*(1+(Math.random()-.5)*p.var*2));
+      if(total<=0) return;
+      // 2~4건으로 분할
+      const n=Math.floor(Math.random()*3)+1;
+      let rem=total;
+      for(let i=0;i<n;i++){
+        const day=String(Math.floor(Math.random()*27)+1).padStart(2,'0');
+        const amt=i<n-1?Math.floor(rem*(0.3+Math.random()*0.4)):rem;
+        rem-=amt;
+        if(amt>0) rows.push([`${m}-${day}`,itemSrc[id],amt,`${itemSrc[id]} ${m.replace('-','년')}월`]);
+      }
+    });
+  });
+  const csv=rows.map(r=>r.join(',')).join('\n');
+  Papa.parse(csv,{header:true,skipEmptyLines:true,complete:res=>{
+    rawRows=res.data;headers=res.meta.fields||[];
+    buildMapping();sw(1);autoRemap();
+    document.getElementById('up-status').innerHTML=
+      `<div class="status-bar status-ok">📋 샘플 ${rawRows.length}건 생성 완료 — 컬럼 매핑 탭에서 확인 후 집계 적용하세요.</div>`;
+  }});
+}
+
+function dlTemplate(){
+  const csv='\uFEFF지출일자,비목,금액(천원),적요,증빙번호\n'+
+    '2022-04-05,인건비(전임교원),8500,4월 교수인건비,R001\n'+
+    '2022-04-10,학생인건비,1020,박사과정 홍길동 4월,R002\n'+
+    '2022-04-15,연구재료비,320,시약 구입,R003\n';
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8;'}));
+  a.download='건별지출내역_템플릿.csv';a.click();
+}
+
+function exportAgg(){
+  MONTHS=getMonths();
+  let csv='\uFEFF비목,'+MONTHS.join(',')+',합계\n';
+  ITEMS.forEach(item=>{
+    const vals=MONTHS.map(m=>Math.round(getAgg(item.id,m)));
+    csv+=item.name+','+vals.join(',')+','+vals.reduce((s,x)=>s+x,0)+'\n';
+  });
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8;'}));
+  a.download='비목별월별집계.csv';a.click();
+}
+
+// ─── 초기화 ───
+document.getElementById('col-item').addEventListener('change',buildItemMappingRows);
+</script>
+
+</div><!-- /appScreen -->
+
+<!-- login-error 표시 제어 (오류 있을 때만 보이도록) -->
+<script>
+const _errEl = document.getElementById('login-error');
+const _origSetter = Object.getOwnPropertyDescriptor(Element.prototype,'textContent').set;
+// login-error에 내용이 있을 때만 display:block
+new MutationObserver(()=>{
+  if(_errEl) _errEl.style.display = _errEl.textContent.trim()||_errEl.innerHTML.trim() ? 'block':'none';
+}).observe(_errEl||document.body, {childList:true,subtree:true,characterData:true});
+</script>
+</body>
+</html>
